@@ -252,10 +252,14 @@ class ScanView(QWidget):
         self.results_table.setItem(row, 4, QTableWidgetItem(file_data.get("scanned_at", "")))
 
     def _update_results_table(self):
-        """Final full update of the results table after scan completes."""
+        """Final full update of the results table after scan completes.
+        Capped at 5000 rows for UI performance — incremental updates already
+        added most rows during the scan."""
         self.results_table.setRowCount(0)
-        self.results_table.setRowCount(len(self.scanned_files))
-        for i, f in enumerate(self.scanned_files):
+        row_count = min(len(self.scanned_files), 5000)
+        self.results_table.setRowCount(row_count)
+        for i in range(row_count):
+            f = self.scanned_files[i]
             self.results_table.setItem(i, 0, QTableWidgetItem(f.get("file_name", "")))
             self.results_table.setItem(i, 1, QTableWidgetItem(f.get("file_path", "")))
             self.results_table.setItem(i, 2, QTableWidgetItem(format_file_size(f.get("size_bytes", 0))))
@@ -278,8 +282,10 @@ class ScanView(QWidget):
         except Exception:
             pass
 
-        # Final table update
-        self._update_results_table()
+        # Emit scan_complete FIRST — pass files to analyze view before any UI work
+        # This prevents the "No Files" error if user switches to Analyze tab during table update
+        self.scan_complete.emit(self.scanned_files, total_size)
+
         self.progress_bar.setVisible(False)
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
@@ -289,4 +295,6 @@ class ScanView(QWidget):
         for path in self.scan_paths:
             self.db.update_index_state(path, total_files, total_size)
 
-        self.scan_complete.emit(self.scanned_files, total_size)
+        # Final table update — capped at 5000 rows for UI performance
+        # (incremental updates already added rows during scan; this just fills gaps)
+        self._update_results_table()
