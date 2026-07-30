@@ -4,6 +4,7 @@ Scans directories and collects file metadata efficiently.
 """
 
 import os
+import json
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -76,6 +77,7 @@ class ScanWorker(QThread):
                 self.error.emit(f"Path does not exist: {scan_path}")
                 continue
 
+            collected = 0
             for dirpath, dirnames, filenames in os.walk(root):
                 if self._cancel:
                     break
@@ -102,6 +104,11 @@ class ScanWorker(QThread):
                         continue
 
                     all_files.append(filepath)
+                    collected += 1
+                    if collected % 5000 == 0:
+                        self.status_update.emit(f"Collecting: {collected} files found...")
+
+            self.status_update.emit(f"Collected {collected} files from {scan_path}")
 
         return all_files
 
@@ -171,4 +178,3 @@ class ScanWorker(QThread):
         self.finished_scan.emit(processed, total_size)
 
 
-import json  # needed for _scan_file error path

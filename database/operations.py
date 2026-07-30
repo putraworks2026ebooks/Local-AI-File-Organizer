@@ -28,7 +28,8 @@ class OperationHistory:
                       source_path: Optional[str] = None,
                       destination_path: Optional[str] = None,
                       category: Optional[str] = None,
-                      details: Optional[dict] = None) -> int:
+                      details: Optional[dict] = None,
+                      commit: bool = True) -> int:
         """Log an operation and return its ID."""
         timestamp = datetime.now().isoformat()
         details_json = json.dumps(details) if details else None
@@ -40,10 +41,12 @@ class OperationHistory:
             (op_type, timestamp, file_path, source_path, destination_path,
              category, details_json),
         )
-        self.db.conn.commit()
+        if commit:
+            self.db.conn.commit()
         return cursor.lastrowid
 
-    def log_to_table(self, level: str, message: str, details: Optional[dict] = None) -> None:
+    def log_to_table(self, level: str, message: str, details: Optional[dict] = None,
+                      commit: bool = True) -> None:
         """Write to the operation_log table."""
         timestamp = datetime.now().isoformat()
         details_json = json.dumps(details) if details else None
@@ -51,7 +54,8 @@ class OperationHistory:
             "INSERT INTO operation_log (timestamp, level, message, details_json) VALUES (?, ?, ?, ?)",
             (timestamp, level, message, details_json),
         )
-        self.db.conn.commit()
+        if commit:
+            self.db.conn.commit()
 
     def get_operations(self, limit: int = 100, offset: int = 0,
                        include_undone: bool = False) -> list[dict]:

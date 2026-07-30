@@ -30,7 +30,6 @@ class FileOrganizer:
         self.duplicates_folder = config.get("organize", {}).get("duplicates_folder", "_Duplicates")
 
     def update_config(self, config: dict) -> None:
-        """Update organizer configuration."""
         self.config = config
         organize = config.get("organize", {})
         self.output_base = organize.get("output_base", "")
@@ -40,13 +39,11 @@ class FileOrganizer:
 
     def get_category_path(self, category: str, file_path: str = None,
                            metadata: dict = None) -> Path:
-        """Get the destination path for a category."""
         if not self.output_base:
             return Path(file_path).parent if file_path else Path.cwd()
 
         base = Path(self.output_base) / sanitize_filename(category)
 
-        # Photo organization by year/month
         if self.photo_by_date and category == "Pictures" and file_path:
             photo_date = get_photo_date(Path(file_path))
             if photo_date:
@@ -60,18 +57,21 @@ class FileOrganizer:
                   metadata: dict = None) -> tuple[bool, str, Optional[int]]:
         """
         Move a single file to its category folder.
-
-        Returns:
-            (success, message, operation_id)
+        Returns: (success, message, operation_id)
         """
         src = Path(src_path)
         if not src.exists():
             return False, f"Source file not found: {src_path}", None
 
+        # Get file size BEFORE moving (source won't exist after)
+        try:
+            file_size = src.stat().st_size
+        except (OSError, PermissionError):
+            file_size = 0
+
         dest_dir = self.get_category_path(category, src_path, metadata)
         filename = src.name
 
-        # Check for filename conflicts
         if (dest_dir / filename).exists():
             if str(dest_dir / filename) == str(src):
                 return True, "File already in correct location", None
@@ -79,7 +79,7 @@ class FileOrganizer:
 
         dest_path = dest_dir / filename
 
-        # Log the operation before moving
+        # Log the operation before moving (no auto-commit — caller batches)
         op_id = self.op_history.log_operation(
             op_type=OperationType.MOVE,
             file_path=str(src),
@@ -87,46 +87,33 @@ class FileOrganizer:
             destination_path=str(dest_path),
             category=category,
             details={"original_name": src.name, "new_name": filename},
+            commit=False,
         )
 
-        # Move the file
         success, result = safe_move_file(src, dest_dir, overwrite=False)
 
         if success:
             self.logger.info(f"Moved: {src_path} → {result} (category: {category})")
-            self.op_history.log_to_table("INFO",
-                f"Moved file: {src.name} → {Path(result).name} [{category}]")
 
-            # Update database record
+            # Update database — use the size we captured BEFORE the move
             self.db.upsert_file({
                 "file_path": str(result),
                 "file_name": Path(result).name,
                 "extension": Path(result).suffix.lower(),
-                "size_bytes": src.stat().st_size if src.exists() else 0,
+                "size_bytes": file_size,
                 "category": category,
                 "scanned_at": datetime.now().isoformat(),
-            })
+            }, commit=False)  # Batch: don't commit per file
 
             return True, result, op_id
         else:
             self.logger.error(f"Move failed: {src_path} → {result}")
-            self.op_history.log_to_table("ERROR", f"Move failed: {src.name}: {result}")
             return False, result, op_id
 
     def organize_files(self, file_categories: dict[str, str],
                        metadata_map: dict = None,
                        progress_callback: callable = None) -> list[dict]:
-        """
-        Organize multiple files based on their categories.
-
-        Args:
-            file_categories: {file_path: category}
-            metadata_map: Optional {file_path: metadata_dict}
-            progress_callback: Optional callback(processed, total, success)
-
-        Returns:
-            List of result dicts.
-        """
+        """Organize multiple files. Batches DB commits for performance."""
         metadata_map = metadata_map or {}
         results = []
         total = len(file_categories)
@@ -149,12 +136,17 @@ class FileOrganizer:
             if success:
                 success_count += 1
 
+            # Batch commit every 50 files
+            if processed % 50 == 0:
+                self.db.conn.commit()
+
             if progress_callback:
                 progress_callback(processed, total, success_count)
 
-        self.logger.info(
-            f"Organized {success_count}/{total} files successfully"
-        )
+        # Final flush
+        self.db.conn.commit()
+
+        self.logger.info(f"Organized {success_count}/{total} files successfully")
         return results
 
     def move_duplicates(self, duplicate_groups: list[dict],
@@ -172,11 +164,7 @@ class FileOrganizer:
                 src = Path(dup_path)
 
                 if not src.exists():
-                    results.append({
-                        "file_path": dup_path,
-                        "success": False,
-                        "message": "File not found",
-                    })
+                    results.append({"file_path": dup_path, "success": False, "message": "File not found"})
                     continue
 
                 filename = src.name
@@ -191,6 +179,7 @@ class FileOrganizer:
                     source_path=str(src),
                     destination_path=str(dest_path),
                     details={"sha256": group["sha256"]},
+                    commit=False,
                 )
 
                 success, result = safe_move_file(src, base, overwrite=False)
@@ -201,13 +190,18 @@ class FileOrganizer:
                     "operation_id": op_id if success else None,
                 })
 
+                if processed % 50 == 0:
+                    self.db.conn.commit()
+
                 if progress_callback:
                     progress_callback(processed, total)
 
+        self.db.conn.commit()
         return results
 
     def find_empty_folders(self, root_path: str) -> list[str]:
         """Find all empty folders within a path."""
+        import os
         empty = []
         for dirpath, dirnames, filenames in os.walk(root_path):
             if not dirnames and not filenames:
@@ -215,14 +209,12 @@ class FileOrganizer:
         return empty
 
     def find_large_files(self, files: list[dict], threshold_mb: int = 1000) -> list[dict]:
-        """Find files larger than the given threshold."""
         threshold = threshold_mb * 1024 * 1024
         large = [f for f in files if f.get("size_bytes", 0) > threshold]
         large.sort(key=lambda f: f.get("size_bytes", 0), reverse=True)
         return large
 
     def get_disk_usage_analysis(self, path: str) -> dict:
-        """Analyze disk usage by category."""
         files = self.db.get_all_files()
         category_sizes = {}
 
@@ -244,6 +236,3 @@ class FileOrganizer:
                 for cat, sz in sorted(category_sizes.items(), key=lambda x: x[1], reverse=True)
             },
         }
-
-
-import os  # needed for find_empty_folders

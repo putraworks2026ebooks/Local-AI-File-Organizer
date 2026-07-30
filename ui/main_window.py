@@ -302,33 +302,73 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Undo", message)
 
     def _undo_all(self):
-        """Undo all operations."""
+        """Undo all operations — run in worker thread to avoid UI freeze."""
         reply = QMessageBox.question(
             self, "Undo All",
-            "This will undo ALL operations. Continue?",
+            "This will undo ALL operations. This may take a moment.\n\nContinue?",
             QMessageBox.Yes | QMessageBox.No,
         )
-        if reply == QMessageBox.Yes:
-            results = self.op_history.undo_all()
-            success = sum(1 for s, _ in results if s)
-            total = len(results)
-            QMessageBox.information(
-                self, "Undo All",
-                f"Undone {success}/{total} operations.",
-            )
-            self.dashboard.update_stats()
+        if reply != QMessageBox.Yes:
+            return
+
+        self.status_bar.showMessage("Undoing all operations...")
+
+        class UndoWorker(QThread):
+            from PySide6.QtCore import Signal
+            finished_undo = Signal(list)
+            def __init__(self, op_history):
+                super().__init__()
+                self.op_history = op_history
+            def run(self):
+                results = self.op_history.undo_all()
+                self.finished_undo.emit(results)
+
+        self._undo_worker = UndoWorker(self.op_history)
+        self._undo_worker.finished_undo.connect(lambda results: self._on_undo_all_complete(results))
+        self._undo_worker.start()
+
+    def _on_undo_all_complete(self, results):
+        success = sum(1 for s, _ in results if s)
+        total = len(results)
+        QMessageBox.information(self, "Undo All", f"Undone {success}/{total} operations.")
+        self.dashboard.update_stats()
+        self.status_bar.showMessage("", 3000)
 
     def _find_empty_folders(self):
-        """Find empty folders."""
+        """Find empty folders — run in a worker thread to avoid UI freeze."""
         folder = QFileDialog.getExistingDirectory(self, "Select Folder to Check")
-        if folder:
-            empty = self.organizer.find_empty_folders(folder)
-            if empty:
-                self.logs_view.append_log(f"Found {len(empty)} empty folders:")
-                for f in empty:
-                    self.logs_view.append_log(f"  {f}")
-            else:
-                QMessageBox.information(self, "Empty Folders", "No empty folders found.")
+        if not folder:
+            return
+
+        self.status_bar.showMessage("Scanning for empty folders...")
+        from PySide6.QtCore import QThread
+
+        class EmptyFolderWorker(QThread):
+            from PySide6.QtCore import Signal
+            finished_scan = Signal(list)
+            def __init__(self, path):
+                super().__init__()
+                self.path = path
+            def run(self):
+                import os
+                empty = []
+                for dirpath, dirnames, filenames in os.walk(self.path):
+                    if not dirnames and not filenames:
+                        empty.append(dirpath)
+                self.finished_scan.emit(empty)
+
+        self._empty_worker = EmptyFolderWorker(folder)
+        self._empty_worker.finished_scan.connect(lambda empty: self._on_empty_folders_found(empty))
+        self._empty_worker.start()
+
+    def _on_empty_folders_found(self, empty: list):
+        if empty:
+            self.logs_view.append_log(f"Found {len(empty)} empty folders:")
+            for f in empty[:200]:
+                self.logs_view.append_log(f"  {f}")
+        else:
+            QMessageBox.information(self, "Empty Folders", "No empty folders found.")
+        self.status_bar.showMessage("", 3000)
 
     def _find_large_files(self):
         """Find large files."""
@@ -363,23 +403,51 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Disk Usage Analysis", msg)
 
     def _export_results(self):
-        """Export scan/analysis results."""
+        """Export results — run in worker thread for large datasets."""
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Results", "organizer_results.json", "JSON Files (*.json)"
         )
-        if path:
-            data = {
-                "files": self.scanned_files,
-                "categories": self.file_categories,
-                "stats": {
-                    "total_files": self.db.get_file_count(),
-                    "total_size": self.db.get_total_size(),
-                    "category_stats": self.db.get_category_stats(),
-                },
-            }
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, default=str)
-            self.status_bar.showMessage(f"Exported to {path}", 3000)
+        if not path:
+            return
+
+        self.status_bar.showMessage("Exporting...")
+
+        class ExportWorker(QThread):
+            from PySide6.QtCore import Signal
+            finished_export = Signal(bool, str)
+            def __init__(self, filepath, scanned_files, file_categories, db):
+                super().__init__()
+                self.filepath = filepath
+                self.scanned_files = scanned_files
+                self.file_categories = file_categories
+                self.db = db
+            def run(self):
+                try:
+                    data = {
+                        "files": self.scanned_files,
+                        "categories": self.file_categories,
+                        "stats": {
+                            "total_files": self.db.get_file_count(),
+                            "total_size": self.db.get_total_size(),
+                            "category_stats": self.db.get_category_stats(),
+                        },
+                    }
+                    with open(self.filepath, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2, default=str)
+                    self.finished_export.emit(True, self.filepath)
+                except Exception as e:
+                    self.finished_export.emit(False, str(e))
+
+        self._export_worker = ExportWorker(path, self.scanned_files, self.file_categories, self.db)
+        self._export_worker.finished_export.connect(lambda ok, msg: self._on_export_complete(ok, msg))
+        self._export_worker.start()
+
+    def _on_export_complete(self, ok: bool, msg: str):
+        if ok:
+            self.status_bar.showMessage(f"Exported to {msg}", 3000)
+        else:
+            QMessageBox.warning(self, "Export Failed", msg)
+            self.status_bar.showMessage("", 3000)
 
     def _show_about(self):
         """Show about dialog."""

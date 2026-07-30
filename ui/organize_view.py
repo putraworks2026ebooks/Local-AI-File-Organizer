@@ -1,6 +1,7 @@
 """
 Organize view for Local AI File Organizer.
 Shows proposed actions, requires user approval, and executes file moves.
+All file operations run in a worker thread to keep UI responsive.
 """
 
 from pathlib import Path
@@ -18,8 +19,63 @@ from utils.helpers import format_file_size
 from utils.logger import get_logger
 
 
+class OrganizeWorker(QThread):
+    """Worker thread for file organization — keeps UI responsive."""
+
+    progress = Signal(int, int, int)  # processed, total, success_count
+    status_update = Signal(str)
+    error = Signal(str)
+    finished_organize = Signal(list)  # results list
+
+    def __init__(self, file_categories: dict[str, str], organizer: FileOrganizer,
+                 metadata_map: dict = None):
+        super().__init__()
+        self.file_categories = file_categories
+        self.organizer = organizer
+        self.metadata_map = metadata_map or {}
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        results = []
+        total = len(self.file_categories)
+        processed = 0
+        success_count = 0
+
+        for file_path, category in self.file_categories.items():
+            if self._cancel:
+                break
+
+            processed += 1
+            metadata = self.metadata_map.get(file_path, {})
+            success, message, op_id = self.organizer.move_file(file_path, category, metadata)
+
+            results.append({
+                "file_path": file_path,
+                "category": category,
+                "success": success,
+                "message": message,
+                "operation_id": op_id,
+            })
+
+            if success:
+                success_count += 1
+
+            self.progress.emit(processed, total, success_count)
+
+            if processed % 100 == 0:
+                self.status_update.emit(f"Organizing: {processed}/{total} ({success_count} moved)")
+
+        self.status_update.emit(f"Done: {success_count}/{total} files moved")
+        self.finished_organize.emit(results)
+
+
 class OrganizeView(QWidget):
-    """Organize interface for moving files to category folders."""
+    """Organize interface."""
+
+    analysis_complete = Signal(dict)
 
     def __init__(self, config: dict, db: DatabaseManager, organizer: FileOrganizer):
         super().__init__()
@@ -27,6 +83,7 @@ class OrganizeView(QWidget):
         self.db = db
         self.organizer = organizer
         self.file_categories: dict[str, str] = {}
+        self.organize_worker = None
         self.logger = get_logger()
         self._init_ui()
 
@@ -101,6 +158,11 @@ class OrganizeView(QWidget):
         self.organize_btn.clicked.connect(self._organize_files)
         btn_layout.addWidget(self.organize_btn)
 
+        self.cancel_btn = QPushButton("⏹️ Cancel")
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self._cancel_organize)
+        btn_layout.addWidget(self.cancel_btn)
+
         self.undo_btn = QPushButton("↩️ Undo Last")
         self.undo_btn.clicked.connect(self._undo_last)
         btn_layout.addWidget(self.undo_btn)
@@ -117,13 +179,11 @@ class OrganizeView(QWidget):
         layout.addWidget(self.status_label)
 
     def set_file_categories(self, file_categories: dict):
-        """Set the file-to-category mapping."""
         self.file_categories = file_categories
         self.status_label.setText(f"{len(file_categories)} files ready for organization")
         self._generate_preview()
 
     def set_config(self, config: dict):
-        """Update config and organizer settings."""
         self.config = config
         self.organizer.update_config(config)
         self.output_edit.setText(config.get("organize", {}).get("output_base", ""))
@@ -136,7 +196,7 @@ class OrganizeView(QWidget):
             self.output_edit.setText(folder)
 
     def _generate_preview(self):
-        """Generate a preview of proposed actions."""
+        """Generate a preview — throttled for large file sets."""
         if not self.file_categories:
             self.status_label.setText("No files to organize. Run analysis first.")
             return
@@ -146,16 +206,19 @@ class OrganizeView(QWidget):
             self.status_label.setText("Please select an output folder first.")
             return
 
-        # Update config
         organize_config = self.config.setdefault("organize", {})
         organize_config["output_base"] = output_base
         organize_config["photo_organize_by_date"] = self.photos_by_date.isChecked()
         organize_config["create_category_folders"] = self.create_folders.isChecked()
         self.organizer.update_config(self.config)
 
-        self.preview_table.setRowCount(len(self.file_categories))
+        # Cap preview at 500 rows for performance; show count in status
+        items = list(self.file_categories.items())
+        preview_count = min(len(items), 500)
+        self.preview_table.setRowCount(preview_count)
 
-        for i, (file_path, category) in enumerate(self.file_categories.items()):
+        for i in range(preview_count):
+            file_path, category = items[i]
             dest_dir = self.organizer.get_category_path(category, file_path)
             dest_path = dest_dir / Path(file_path).name
 
@@ -165,10 +228,11 @@ class OrganizeView(QWidget):
             self.preview_table.setItem(i, 3, QTableWidgetItem(str(dest_path)))
             self.preview_table.setItem(i, 4, QTableWidgetItem("Pending"))
 
-        self.status_label.setText(f"Preview: {len(self.file_categories)} files to organize")
+        suffix = f" (showing first {preview_count})" if preview_count < len(items) else ""
+        self.status_label.setText(f"Preview: {len(self.file_categories)} files to organize{suffix}")
 
     def _organize_files(self):
-        """Execute file organization with user confirmation."""
+        """Execute file organization in a WORKER THREAD — no UI freeze."""
         if not self.file_categories:
             QMessageBox.warning(self, "No Files", "No files to organize.")
             return
@@ -178,7 +242,6 @@ class OrganizeView(QWidget):
             QMessageBox.warning(self, "No Output", "Please select an output folder.")
             return
 
-        # Confirmation
         reply = QMessageBox.question(
             self, "Confirm Organization",
             f"Move {len(self.file_categories)} files to category folders in:\n{output_base}\n\n"
@@ -188,7 +251,6 @@ class OrganizeView(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        # Update config
         organize_config = self.config.setdefault("organize", {})
         organize_config["output_base"] = output_base
         organize_config["photo_organize_by_date"] = self.photos_by_date.isChecked()
@@ -199,44 +261,55 @@ class OrganizeView(QWidget):
         self.progress_bar.setMaximum(len(self.file_categories))
         self.progress_bar.setValue(0)
         self.organize_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.status_label.setText("Organizing...")
 
-        results = self.organizer.organize_files(
-            self.file_categories,
-            progress_callback=self._on_progress,
-        )
+        self.organize_worker = OrganizeWorker(self.file_categories, self.organizer)
+        self.organize_worker.progress.connect(self._on_progress)
+        self.organize_worker.status_update.connect(self._on_status)
+        self.organize_worker.finished_organize.connect(self._on_finished)
+        self.organize_worker.start()
 
-        # Update table with results
-        success_count = 0
-        for i, result in enumerate(results):
-            status = "✅ Moved" if result["success"] else "❌ Failed"
-            item = QTableWidgetItem(status)
-            if result["success"]:
-                item.setForeground(QColor("green"))
-                success_count += 1
-            else:
-                item.setForeground(QColor("red"))
-            self.preview_table.setItem(i, 4, item)
-
-        self.progress_bar.setVisible(False)
-        self.organize_btn.setEnabled(True)
-        self.status_label.setText(
-            f"Organized: {success_count}/{len(results)} files moved successfully"
-        )
-        QMessageBox.information(
-            self, "Organization Complete",
-            f"Successfully moved {success_count} of {len(results)} files.\n"
-            "Use Undo to reverse any moves.",
-        )
+    def _cancel_organize(self):
+        if self.organize_worker and self.organize_worker.isRunning():
+            self.organize_worker.cancel()
+            self.status_label.setText("Cancelling...")
+            self.organize_worker.wait(5000)
 
     def _on_progress(self, processed, total, success_count):
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(processed)
-        self.status_label.setText(
-            f"Processing {processed}/{total} ({success_count} succeeded)"
+        self.status_label.setText(f"Processing {processed}/{total} ({success_count} moved)")
+
+    def _on_status(self, msg: str):
+        self.status_label.setText(msg)
+
+    def _on_finished(self, results: list):
+        """Handle organize completion."""
+        self.progress_bar.setVisible(False)
+        self.organize_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+
+        success_count = sum(1 for r in results if r["success"])
+        total = len(results)
+
+        # Update preview table (only the rows we showed)
+        preview_count = min(len(results), self.preview_table.rowCount())
+        for i in range(preview_count):
+            result = results[i]
+            status = "✅ Moved" if result["success"] else "❌ Failed"
+            item = QTableWidgetItem(status)
+            item.setForeground(QColor("green") if result["success"] else QColor("red"))
+            self.preview_table.setItem(i, 4, item)
+
+        self.status_label.setText(f"Organized: {success_count}/{total} files moved successfully")
+        QMessageBox.information(
+            self, "Organization Complete",
+            f"Successfully moved {success_count} of {total} files.\n"
+            "Use Undo to reverse any moves.",
         )
 
     def _undo_last(self):
-        """Undo the last move operation."""
         success, message = self.organizer.op_history.undo_last()
         if success:
             QMessageBox.information(self, "Undo", message)

@@ -153,7 +153,8 @@ class DatabaseManager:
     # --- Duplicate operations ---
 
     def insert_duplicate_group(self, sha256: str, file_path: str, group_id: int,
-                               size_bytes: int, keep: bool = False) -> None:
+                               size_bytes: int, keep: bool = False,
+                               commit: bool = True) -> None:
         """Insert a duplicate group entry."""
         self.conn.execute(
             """INSERT INTO duplicate_groups (sha256, file_path, group_id, size_bytes, keep, detected_at)
@@ -161,7 +162,8 @@ class DatabaseManager:
             (sha256, file_path, group_id, size_bytes, 1 if keep else 0,
              datetime.now().isoformat()),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
     def get_duplicate_groups(self) -> list[dict]:
         """Get all duplicate groups."""

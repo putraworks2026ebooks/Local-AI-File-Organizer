@@ -26,14 +26,7 @@ class DuplicateFinder:
                         cancel_check: Optional[Callable] = None) -> list[dict]:
         """
         Find duplicate files from a list of file records.
-
-        Args:
-            files: List of file dicts with file_path and size_bytes.
-            progress_callback: Optional callback(processed, total).
-            cancel_check: Optional callable returning True if cancelled.
-
-        Returns:
-            List of duplicate group dicts.
+        Uses multi-threaded hashing for speed.
         """
         if not files:
             return []
@@ -42,7 +35,7 @@ class DuplicateFinder:
         size_groups = defaultdict(list)
         for f in files:
             size = f.get("size_bytes", 0)
-            if size > 0:  # Skip empty files
+            if size > 0:
                 size_groups[size].append(f)
 
         # Only hash files that share a size with at least one other file
@@ -57,25 +50,35 @@ class DuplicateFinder:
             self.wasted_space = 0
             return []
 
-        # Step 2: Hash all candidates
+        # Step 2: Hash all candidates in PARALLEL (not sequential)
         total = len(candidates)
         processed = 0
         hash_map = defaultdict(list)
 
-        for f in candidates:
-            if cancel_check and cancel_check():
-                break
+        with ThreadPoolExecutor(max_workers=self.hasher.max_workers) as executor:
+            futures = {}
+            for f in candidates:
+                if cancel_check and cancel_check():
+                    break
+                filepath = f.get("file_path", f.get("file_name", ""))
+                futures[executor.submit(self.hasher.hash_file, filepath)] = f
 
-            filepath = f.get("file_path", f.get("file_name", ""))
-            file_hash = self.hasher.hash_file(filepath)
+            for future in as_completed(futures):
+                if cancel_check and cancel_check():
+                    break
 
-            if file_hash:
-                f["sha256"] = hash_val = file_hash
-                hash_map[hash_val].append(f)
+                f = futures[future]
+                try:
+                    file_hash = future.result()
+                    if file_hash:
+                        f["sha256"] = file_hash
+                        hash_map[file_hash].append(f)
+                except Exception:
+                    pass
 
-            processed += 1
-            if progress_callback:
-                progress_callback(processed, total)
+                processed += 1
+                if progress_callback:
+                    progress_callback(processed, total)
 
         # Step 3: Build duplicate groups (only groups with > 1 file)
         groups = []
@@ -88,7 +91,6 @@ class DuplicateFinder:
                 continue
 
             group_id += 1
-            # Keep the first file (or oldest), mark others as duplicates
             group_files.sort(key=lambda x: x.get("file_path", ""))
             keep_file = group_files[0]
             duplicates = group_files[1:]
@@ -113,7 +115,6 @@ class DuplicateFinder:
             }
             groups.append(group_entry)
 
-        # Sort by wasted space descending
         groups.sort(key=lambda g: g["wasted_space"], reverse=True)
 
         self.duplicate_groups = groups
@@ -123,7 +124,6 @@ class DuplicateFinder:
         return groups
 
     def get_summary(self) -> dict:
-        """Get summary statistics of duplicate detection."""
         return {
             "total_groups": len(self.duplicate_groups),
             "total_duplicates": self.total_duplicates,
@@ -132,10 +132,6 @@ class DuplicateFinder:
         }
 
     def select_duplicate_to_keep(self, group: dict, strategy: str = "oldest") -> str:
-        """
-        Select which file to keep from a duplicate group.
-        Strategies: oldest, newest, largest_path, shortest_path, first.
-        """
         paths = group.get("file_paths", [])
         if not paths:
             return ""

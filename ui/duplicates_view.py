@@ -1,6 +1,7 @@
 """
 Duplicates view for Local AI File Organizer.
 Displays duplicate file groups with options to review and move duplicates.
+All heavy operations run in worker threads.
 """
 
 from pathlib import Path
@@ -13,6 +14,8 @@ from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QColor
 
 from core.duplicate_finder import DuplicateFinder
+from core.organizer import FileOrganizer
+from database.operations import OperationHistory
 from database.db_manager import DatabaseManager
 from utils.helpers import format_file_size
 from utils.logger import get_logger
@@ -58,6 +61,73 @@ class DuplicateScanWorker(QThread):
         self.finished_scan.emit(groups, summary)
 
 
+class MoveDuplicatesWorker(QThread):
+    """Worker thread for moving duplicate files."""
+
+    progress = Signal(int, int)
+    status_update = Signal(str)
+    error = Signal(str)
+    finished_move = Signal(list)
+
+    def __init__(self, groups: list[dict], output_folder: str,
+                 duplicate_finder: DuplicateFinder, strategy: str):
+        super().__init__()
+        self.groups = groups
+        self.output_folder = output_folder
+        self.duplicate_finder = duplicate_finder
+        self.strategy = strategy
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        import shutil
+        from utils.helpers import get_unique_filename
+        from database.operations import OperationType
+
+        results = []
+        base = Path(self.output_folder) / "_Duplicates"
+        base.mkdir(parents=True, exist_ok=True)
+
+        total = sum(len(g["duplicates"]) for g in self.groups)
+        processed = 0
+
+        for group in self.groups:
+            if self._cancel:
+                break
+
+            for dup_path in group["duplicates"]:
+                if self._cancel:
+                    break
+
+                processed += 1
+                src = Path(dup_path)
+
+                if not src.exists():
+                    results.append({"file_path": dup_path, "success": False, "message": "File not found"})
+                    continue
+
+                filename = src.name
+                if (base / filename).exists():
+                    filename = get_unique_filename(base, filename)
+
+                dest_path = base / filename
+
+                try:
+                    shutil.move(str(src), str(dest_path))
+                    results.append({"file_path": dup_path, "success": True, "message": str(dest_path)})
+                except (OSError, shutil.Error) as e:
+                    results.append({"file_path": dup_path, "success": False, "message": str(e)})
+
+                self.progress.emit(processed, total)
+                if processed % 100 == 0:
+                    self.status_update.emit(f"Moving duplicates: {processed}/{total}")
+
+        self.status_update.emit(f"Moved {sum(1 for r in results if r['success'])}/{total} duplicates")
+        self.finished_move.emit(results)
+
+
 class DuplicatesView(QWidget):
     """Duplicate finder interface."""
 
@@ -68,6 +138,7 @@ class DuplicatesView(QWidget):
         self.duplicate_finder = duplicate_finder
         self.duplicate_groups: list[dict] = []
         self.scan_worker = None
+        self.move_worker = None
         self.logger = get_logger()
         self._init_ui()
 
@@ -185,6 +256,9 @@ class DuplicatesView(QWidget):
         if self.scan_worker and self.scan_worker.isRunning():
             self.scan_worker.cancel()
             self.scan_worker.wait(3000)
+        if self.move_worker and self.move_worker.isRunning():
+            self.move_worker.cancel()
+            self.move_worker.wait(3000)
 
     def _on_progress(self, current, total):
         self.progress_bar.setMaximum(total)
@@ -207,9 +281,10 @@ class DuplicatesView(QWidget):
         self.lbl_duplicates.setText(f"Duplicates: {summary['total_duplicates']}")
         self.lbl_wasted.setText(f"Wasted: {summary['wasted_formatted']}")
 
-        # Populate tree
+        # Populate tree — cap at 1000 groups for UI performance
         strategy = self.strategy_combo.currentText().lower().split()[0]
-        for group in groups:
+        display_groups = groups[:1000]
+        for group in display_groups:
             group_item = QTreeWidgetItem([
                 f"Group {group['group_id']} — {group['count']} files",
                 group['size_formatted'],
@@ -218,7 +293,6 @@ class DuplicatesView(QWidget):
             ])
             group_item.setForeground(0, QColor("blue"))
 
-            # Determine which file to keep
             keep_path = self.duplicate_finder.select_duplicate_to_keep(group, strategy)
 
             for file_path in group['file_paths']:
@@ -238,26 +312,33 @@ class DuplicatesView(QWidget):
             self.results_tree.addTopLevelItem(group_item)
             group_item.setExpanded(True)
 
-        # Save to database
+        if len(groups) > 1000:
+            self.status_label.setText(f"Showing 1000 of {len(groups)} groups")
+
+        # Save to database — BATCH commits (not per-record)
         self.db.clear_duplicate_groups()
+        batch_count = 0
         for group in groups:
-            for i, file_path in enumerate(group['file_paths']):
+            for file_path in group['file_paths']:
                 self.db.insert_duplicate_group(
                     sha256=group['sha256'],
                     file_path=file_path,
                     group_id=group['group_id'],
                     size_bytes=group['size_bytes'],
                     keep=(file_path == group.get('keep_file', group['file_paths'][0])),
+                    commit=False,
                 )
+                batch_count += 1
+                if batch_count % 100 == 0:
+                    self.db.conn.commit()
+        self.db.conn.commit()
 
     def _move_duplicates(self):
-        """Move duplicate files to a duplicates folder."""
+        """Move duplicate files to a duplicates folder — in a worker thread."""
         if not self.duplicate_groups:
             return
 
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select Duplicates Folder"
-        )
+        folder = QFileDialog.getExistingDirectory(self, "Select Duplicates Folder")
         if not folder:
             return
 
@@ -270,20 +351,32 @@ class DuplicatesView(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        from core.organizer import FileOrganizer
-        from database.operations import OperationHistory
+        strategy = self.strategy_combo.currentText().lower().split()[0]
 
-        op_history = OperationHistory(self.db)
-        organizer = FileOrganizer(self.db, op_history, self.config)
-        organizer.duplicates_folder = Path(folder).name
-        organizer.output_base = str(Path(folder).parent)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.find_btn.setEnabled(False)
+        self.move_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
 
-        results = organizer.move_duplicates(self.duplicate_groups, output_base=folder)
-        success = sum(1 for r in results if r['success'])
-        total = len(results)
-
-        QMessageBox.information(
-            self, "Duplicates Moved",
-            f"Moved {success}/{total} duplicate files to {folder}",
+        self.move_worker = MoveDuplicatesWorker(
+            self.duplicate_groups, folder, self.duplicate_finder, strategy
         )
+        self.move_worker.progress.connect(self._on_progress)
+        self.move_worker.status_update.connect(self._on_status)
+        self.move_worker.finished_move.connect(self._on_move_finished)
+        self.move_worker.start()
+
+    def _on_move_finished(self, results: list):
+        self.progress_bar.setVisible(False)
+        self.find_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+        self.move_btn.setEnabled(True)
+
+        success = sum(1 for r in results if r["success"])
+        total = len(results)
         self.status_label.setText(f"Moved {success}/{total} duplicates")
+        QMessageBox.information(
+            self, "Move Complete",
+            f"Moved {success} of {total} duplicate files.\nUse Undo to reverse any moves.",
+        )
