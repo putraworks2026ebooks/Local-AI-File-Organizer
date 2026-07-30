@@ -6,6 +6,7 @@ import pytest
 import tempfile
 import shutil
 from pathlib import Path
+from datetime import datetime
 from unittest.mock import Mock, MagicMock
 
 from database.db_manager import DatabaseManager
@@ -133,6 +134,40 @@ class TestFileOrganizer:
         }
 
         results = organizer.organize_files(file_categories)
+
+        assert len(results) == 2
+        assert all(r["success"] for r in results)
+
+        # Documents go to a flat category folder
+        assert (tmp_path / "output" / "Documents" / "doc1.txt").exists()
+
+        # Pictures are organized by year/month (photo_organize_by_date is True)
+        # The file modification time is used, so check the current year/month
+        now = datetime.now()
+        year = str(now.year)
+        month = f"{now.month:02d}"
+        photo_path = tmp_path / "output" / "Pictures" / year / month / "image1.jpg"
+        assert photo_path.exists(), f"Expected image at {photo_path}"
+
+    def test_organize_files_no_date_organization(self, temp_db, temp_source_dir, tmp_path):
+        """Test organizing files with photo date organization disabled."""
+        op_history = OperationHistory(temp_db)
+        config = {
+            "organize": {
+                "output_base": str(tmp_path / "output"),
+                "create_category_folders": True,
+                "photo_organize_by_date": False,
+                "duplicates_folder": "_Duplicates",
+            }
+        }
+        org = FileOrganizer(temp_db, op_history, config)
+
+        file_categories = {
+            str(Path(temp_source_dir) / "doc1.txt"): "Documents",
+            str(Path(temp_source_dir) / "image1.jpg"): "Pictures",
+        }
+
+        results = org.organize_files(file_categories)
 
         assert len(results) == 2
         assert all(r["success"] for r in results)
