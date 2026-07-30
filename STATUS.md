@@ -13,14 +13,14 @@
 | Module | Status | Tests | Notes |
 |--------|--------|-------|-------|
 | **Scanner** (`core/scanner.py`) | ✅ Complete | ✅ 4 tests | Multi-threaded, system folder skipping, ignore extensions |
-| **Hasher** (`core/hasher.py`) | ✅ Complete | ✅ 7 tests | SHA-256, quick hash, batch hashing |
-| **Ollama Client** (`core/ollama_client.py`) | ✅ Complete | ✅ 7 tests | Chat API, JSON parsing, batch classify, model listing |
-| **Organizer** (`core/organizer.py`) | ✅ Complete | ✅ 6 tests | Safe moves, category folders, photo date organization |
-| **Duplicate Finder** (`core/duplicate_finder.py`) | ✅ Complete | ✅ 7 tests | SHA-256 grouping, wasted space calc, keep strategies |
+| **Hasher** (`core/hasher.py`) | ✅ Complete | ✅ 8 tests | SHA-256, quick hash, batch hashing |
+| **Ollama Client** (`core/ollama_client.py`) | ✅ Complete | ✅ 8 tests | Chat API, JSON parsing, batch classify, model listing |
+| **Organizer** (`core/organizer.py`) | ✅ Complete | ✅ 7 tests | Safe moves, category folders, photo date organization |
+| **Duplicate Finder** (`core/duplicate_finder.py`) | ✅ Complete | ✅ 8 tests | SHA-256 grouping, wasted space calc, keep strategies |
 | **Metadata Extractor** (`core/metadata.py`) | ✅ Complete | — | Images (EXIF), videos, audio, documents, archives |
 | **Content Reader** (`core/content_reader.py`) | ✅ Complete | — | PDF, DOCX, ODT, EPUB, RTF, text formats |
 | **OCR Processor** (`core/ocr.py`) | ✅ Complete | — | Tesseract integration for scanned PDFs |
-| **Database** (`database/`) | ✅ Complete | ✅ 11 tests | SQLite with WAL mode, all CRUD operations |
+| **Database** (`database/`) | ✅ Complete | ✅ 15 tests | SQLite with WAL mode, all CRUD operations |
 | **Operation History** (`database/operations.py`) | ✅ Complete | ✅ 4 tests | Full undo support, log table, statistics |
 | **Main Window** (`ui/main_window.py`) | ✅ Complete | — | Tabbed UI, menus, toolbar, status bar |
 | **Dashboard** (`ui/dashboard.py`) | ✅ Complete | — | Stat cards, category breakdown, AI status |
@@ -128,14 +128,14 @@
 ## Test Summary
 
 ```
-tests/test_database.py          — 11 tests ✅
-tests/test_duplicate_finder.py  —  7 tests ✅
-tests/test_hasher.py            —  7 tests ✅
-tests/test_ollama_client.py     —  7 tests ✅
-tests/test_organizer.py         —  6 tests ✅
+tests/test_database.py          — 15 tests ✅
+tests/test_duplicate_finder.py  —  8 tests ✅
+tests/test_hasher.py            —  8 tests ✅
+tests/test_ollama_client.py     —  8 tests ✅
+tests/test_organizer.py         —  7 tests ✅
 tests/test_scanner.py           —  4 tests ✅
 ────────────────────────────────────────────
-Total: 42 tests
+Total: 53 tests (all passing ✅)
 ```
 
 Run tests with:
