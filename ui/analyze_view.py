@@ -248,12 +248,12 @@ class AnalyzeView(QWidget):
     def _init_ui(self):
         layout = QVBoxLayout(self)
 
-        title = QLabel("🤖 AI Analysis")
+        title = QLabel("📂 File Analysis")
         title.setStyleSheet("font-size: 20px; font-weight: bold; padding: 10px;")
         layout.addWidget(title)
 
-        # AI status
-        status_group = QGroupBox("Ollama AI Engine")
+        # AI status + mode toggle
+        status_group = QGroupBox("Classification Mode")
         status_layout = QHBoxLayout()
 
         self.ai_status = QLabel("Checking...")
@@ -269,13 +269,25 @@ class AnalyzeView(QWidget):
         refresh_btn.clicked.connect(self._check_ai_status)
         status_layout.addWidget(refresh_btn)
 
+        status_layout.addStretch()
+
+        # Mode toggle: AI vs Rule-based
+        self.ai_mode_toggle = QCheckBox("Use AI (requires Ollama)")
+        self.ai_mode_toggle.setToolTip(
+            "Checked: use Ollama AI for smart classification.\n"
+            "Unchecked: use rule-based classification by file extension (no AI needed)."
+        )
+        self.ai_mode_toggle.setChecked(self.config.get("analyze", {}).get("use_ai", True))
+        self.ai_mode_toggle.toggled.connect(self._on_mode_toggled)
+        status_layout.addWidget(self.ai_mode_toggle)
+
         status_group.setLayout(status_layout)
         layout.addWidget(status_group)
 
         # Info banner for no-AI mode
         self.no_ai_banner = QLabel(
-            "⚠️ Ollama not detected. Files will be classified by extension (rule-based mode).\n"
-            "Install Ollama from ollama.ai and pull a model for AI-powered classification."
+            "ℹ️ Rule-based mode active. Files are classified by extension — no AI needed.\n"
+            "Enable 'Use AI' above and install Ollama for smarter content-based classification."
         )
         self.no_ai_banner.setStyleSheet(
             "background-color: #fff3cd; color: #856404; padding: 10px; "
@@ -333,12 +345,30 @@ class AnalyzeView(QWidget):
         self.status_label.setText(f"{len(files)} files ready for analysis")
         self.preview_table.setRowCount(0)
 
+    def _on_mode_toggled(self, checked: bool):
+        """Handle AI mode toggle."""
+        if checked and not self.ollama.is_available():
+            # User wants AI but Ollama isn't running — uncheck and inform
+            self.ai_mode_toggle.setChecked(False)
+            QMessageBox.information(
+                self, "Ollama Not Available",
+                "Ollama is not running. Please install and start Ollama first.\n\n"
+                "Continuing in rule-based mode.",
+            )
+            return
+
+        if checked:
+            self.no_ai_banner.setVisible(False)
+            self.analyze_btn.setText("🤖 Analyze Files")
+        else:
+            self.no_ai_banner.setVisible(True)
+            self.analyze_btn.setText("📁 Analyze Files")
+
     def _check_ai_status(self):
         """Check Ollama availability and populate models."""
         if self.ollama.is_available():
             self.ai_status.setText("✅ Connected")
             self.ai_status.setStyleSheet("font-weight: bold; color: green;")
-            self.no_ai_banner.setVisible(False)
 
             models = self.ollama.list_models()
             self.model_combo.clear()
@@ -347,12 +377,20 @@ class AnalyzeView(QWidget):
             current_model = self.ollama.model
             if current_model in models:
                 self.model_combo.setCurrentText(current_model)
+
+            # Auto-enable AI toggle if Ollama is available
+            if self.ai_mode_toggle.isChecked():
+                self.no_ai_banner.setVisible(False)
         else:
             self.ai_status.setText("❌ Not Connected")
             self.ai_status.setStyleSheet("font-weight: bold; color: red;")
-            self.no_ai_banner.setVisible(True)
             self.model_combo.clear()
             self.model_combo.addItem("No models available")
+
+            # Auto-disable AI toggle if Ollama isn't available
+            if self.ai_mode_toggle.isChecked():
+                self.ai_mode_toggle.setChecked(False)
+            self.no_ai_banner.setVisible(True)
 
     def _start_analysis(self):
         """Start AI or rule-based analysis."""
@@ -360,21 +398,10 @@ class AnalyzeView(QWidget):
             QMessageBox.warning(self, "No Files", "Scan files first before analyzing.")
             return
 
-        use_ai = self.ollama.is_available()
+        # Use toggle to decide AI vs rule-based — no confirmation dialog needed
+        use_ai = self.ai_mode_toggle.isChecked() and self.ollama.is_available()
 
-        if not use_ai:
-            # Confirm rule-based fallback
-            reply = QMessageBox.question(
-                self, "AI Not Available",
-                "Ollama is not running. Files will be classified by extension only (rule-based mode).\n\n"
-                "This is less accurate than AI classification but works without any setup.\n\n"
-                "Continue with rule-based analysis?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
-            )
-            if reply != QMessageBox.Yes:
-                return
-        else:
+        if use_ai:
             # Update model from combo
             model = self.model_combo.currentText()
             if model and model != "No models available":

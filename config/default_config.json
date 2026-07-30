@@ -10,10 +10,25 @@
     "max_workers": 4,
     "max_file_size_mb": 512,
     "skip_system_folders": true,
-    "system_folders": ["Windows", "System32", "$Recycle.Bin", "Program Files", "Program Files (x86)", "AppData", "ProgramData"],
+    "system_folders": [
+      "Windows",
+      "System32",
+      "$Recycle.Bin",
+      "Program Files",
+      "Program Files (x86)",
+      "AppData",
+      "ProgramData"
+    ],
     "whitelist": [],
     "blacklist": [],
-    "ignore_extensions": [".tmp", ".temp", ".log", ".lock", ".thumbs", ".lnk"],
+    "ignore_extensions": [
+      ".tmp",
+      ".temp",
+      ".log",
+      ".lock",
+      ".thumbs",
+      ".lnk"
+    ],
     "incremental_indexing": true
   },
   "organize": {
@@ -56,5 +71,9 @@
     "file": "logs/organizer.log",
     "max_size_mb": 10,
     "backup_count": 5
+  },
+  "analyze": {
+    "use_ai": true,
+    "save_results_to_db": true
   }
 }
