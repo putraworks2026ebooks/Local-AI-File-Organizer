@@ -1,0 +1,249 @@
+"""
+File organizer for Local AI File Organizer.
+Handles safe file moves, category-based organization, and photo organization by date.
+"""
+
+import json
+import shutil
+from pathlib import Path
+from datetime import datetime
+from typing import Optional
+
+from database.db_manager import DatabaseManager
+from database.operations import OperationHistory, OperationType
+from utils.helpers import safe_move_file, get_unique_filename, get_photo_date, sanitize_filename
+from utils.logger import get_logger
+
+
+class FileOrganizer:
+    """Organizes files into category folders with undo support."""
+
+    def __init__(self, db: DatabaseManager, op_history: OperationHistory, config: dict):
+        self.db = db
+        self.op_history = op_history
+        self.config = config
+        self.logger = get_logger()
+
+        self.output_base = config.get("organize", {}).get("output_base", "")
+        self.create_category_folders = config.get("organize", {}).get("create_category_folders", True)
+        self.photo_by_date = config.get("organize", {}).get("photo_organize_by_date", True)
+        self.duplicates_folder = config.get("organize", {}).get("duplicates_folder", "_Duplicates")
+
+    def update_config(self, config: dict) -> None:
+        """Update organizer configuration."""
+        self.config = config
+        organize = config.get("organize", {})
+        self.output_base = organize.get("output_base", "")
+        self.create_category_folders = organize.get("create_category_folders", True)
+        self.photo_by_date = organize.get("photo_organize_by_date", True)
+        self.duplicates_folder = organize.get("duplicates_folder", "_Duplicates")
+
+    def get_category_path(self, category: str, file_path: str = None,
+                           metadata: dict = None) -> Path:
+        """Get the destination path for a category."""
+        if not self.output_base:
+            return Path(file_path).parent if file_path else Path.cwd()
+
+        base = Path(self.output_base) / sanitize_filename(category)
+
+        # Photo organization by year/month
+        if self.photo_by_date and category == "Pictures" and file_path:
+            photo_date = get_photo_date(Path(file_path))
+            if photo_date:
+                year = str(photo_date.year)
+                month = f"{photo_date.month:02d}"
+                base = base / year / month
+
+        return base
+
+    def move_file(self, src_path: str, category: str,
+                  metadata: dict = None) -> tuple[bool, str, Optional[int]]:
+        """
+        Move a single file to its category folder.
+
+        Returns:
+            (success, message, operation_id)
+        """
+        src = Path(src_path)
+        if not src.exists():
+            return False, f"Source file not found: {src_path}", None
+
+        dest_dir = self.get_category_path(category, src_path, metadata)
+        filename = src.name
+
+        # Check for filename conflicts
+        if (dest_dir / filename).exists():
+            if str(dest_dir / filename) == str(src):
+                return True, "File already in correct location", None
+            filename = get_unique_filename(dest_dir, filename)
+
+        dest_path = dest_dir / filename
+
+        # Log the operation before moving
+        op_id = self.op_history.log_operation(
+            op_type=OperationType.MOVE,
+            file_path=str(src),
+            source_path=str(src),
+            destination_path=str(dest_path),
+            category=category,
+            details={"original_name": src.name, "new_name": filename},
+        )
+
+        # Move the file
+        success, result = safe_move_file(src, dest_dir, overwrite=False)
+
+        if success:
+            self.logger.info(f"Moved: {src_path} → {result} (category: {category})")
+            self.op_history.log_to_table("INFO",
+                f"Moved file: {src.name} → {Path(result).name} [{category}]")
+
+            # Update database record
+            self.db.upsert_file({
+                "file_path": str(result),
+                "file_name": Path(result).name,
+                "extension": Path(result).suffix.lower(),
+                "size_bytes": src.stat().st_size if src.exists() else 0,
+                "category": category,
+                "scanned_at": datetime.now().isoformat(),
+            })
+
+            return True, result, op_id
+        else:
+            self.logger.error(f"Move failed: {src_path} → {result}")
+            self.op_history.log_to_table("ERROR", f"Move failed: {src.name}: {result}")
+            return False, result, op_id
+
+    def organize_files(self, file_categories: dict[str, str],
+                       metadata_map: dict = None,
+                       progress_callback: callable = None) -> list[dict]:
+        """
+        Organize multiple files based on their categories.
+
+        Args:
+            file_categories: {file_path: category}
+            metadata_map: Optional {file_path: metadata_dict}
+            progress_callback: Optional callback(processed, total, success)
+
+        Returns:
+            List of result dicts.
+        """
+        metadata_map = metadata_map or {}
+        results = []
+        total = len(file_categories)
+        processed = 0
+        success_count = 0
+
+        for file_path, category in file_categories.items():
+            processed += 1
+            metadata = metadata_map.get(file_path, {})
+            success, message, op_id = self.move_file(file_path, category, metadata)
+
+            results.append({
+                "file_path": file_path,
+                "category": category,
+                "success": success,
+                "message": message,
+                "operation_id": op_id,
+            })
+
+            if success:
+                success_count += 1
+
+            if progress_callback:
+                progress_callback(processed, total, success_count)
+
+        self.logger.info(
+            f"Organized {success_count}/{total} files successfully"
+        )
+        return results
+
+    def move_duplicates(self, duplicate_groups: list[dict],
+                        output_base: str = None,
+                        progress_callback: callable = None) -> list[dict]:
+        """Move duplicate files to a dedicated duplicates folder."""
+        results = []
+        base = Path(output_base or self.output_base) / self.duplicates_folder
+        total = sum(len(g["duplicates"]) for g in duplicate_groups)
+        processed = 0
+
+        for group in duplicate_groups:
+            for dup_path in group["duplicates"]:
+                processed += 1
+                src = Path(dup_path)
+
+                if not src.exists():
+                    results.append({
+                        "file_path": dup_path,
+                        "success": False,
+                        "message": "File not found",
+                    })
+                    continue
+
+                filename = src.name
+                if (base / filename).exists():
+                    filename = get_unique_filename(base, filename)
+
+                dest_path = base / filename
+
+                op_id = self.op_history.log_operation(
+                    op_type=OperationType.DUPLICATE_MOVE,
+                    file_path=str(src),
+                    source_path=str(src),
+                    destination_path=str(dest_path),
+                    details={"sha256": group["sha256"]},
+                )
+
+                success, result = safe_move_file(src, base, overwrite=False)
+                results.append({
+                    "file_path": dup_path,
+                    "success": success,
+                    "message": result,
+                    "operation_id": op_id if success else None,
+                })
+
+                if progress_callback:
+                    progress_callback(processed, total)
+
+        return results
+
+    def find_empty_folders(self, root_path: str) -> list[str]:
+        """Find all empty folders within a path."""
+        empty = []
+        for dirpath, dirnames, filenames in os.walk(root_path):
+            if not dirnames and not filenames:
+                empty.append(dirpath)
+        return empty
+
+    def find_large_files(self, files: list[dict], threshold_mb: int = 1000) -> list[dict]:
+        """Find files larger than the given threshold."""
+        threshold = threshold_mb * 1024 * 1024
+        large = [f for f in files if f.get("size_bytes", 0) > threshold]
+        large.sort(key=lambda f: f.get("size_bytes", 0), reverse=True)
+        return large
+
+    def get_disk_usage_analysis(self, path: str) -> dict:
+        """Analyze disk usage by category."""
+        files = self.db.get_all_files()
+        category_sizes = {}
+
+        for f in files:
+            category = f.get("category", "Uncategorized")
+            size = f.get("size_bytes", 0)
+            category_sizes[category] = category_sizes.get(category, 0) + size
+
+        from utils.helpers import get_disk_usage, format_file_size
+        disk = get_disk_usage(path)
+
+        return {
+            "disk_total": disk["total"],
+            "disk_used": disk["used"],
+            "disk_free": disk["free"],
+            "percent_used": disk["percent_used"],
+            "by_category": {
+                cat: {"size": sz, "formatted": format_file_size(sz)}
+                for cat, sz in sorted(category_sizes.items(), key=lambda x: x[1], reverse=True)
+            },
+        }
+
+
+import os  # needed for find_empty_folders

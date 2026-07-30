@@ -1,0 +1,60 @@
+{
+  "ollama": {
+    "server_url": "http://localhost:11434",
+    "model": "llama3.1",
+    "timeout": 60,
+    "temperature": 0.1,
+    "max_tokens": 100
+  },
+  "scan": {
+    "max_workers": 4,
+    "max_file_size_mb": 512,
+    "skip_system_folders": true,
+    "system_folders": ["Windows", "System32", "$Recycle.Bin", "Program Files", "Program Files (x86)", "AppData", "ProgramData"],
+    "whitelist": [],
+    "blacklist": [],
+    "ignore_extensions": [".tmp", ".temp", ".log", ".lock", ".thumbs", ".lnk"],
+    "incremental_indexing": true
+  },
+  "organize": {
+    "output_base": "",
+    "create_category_folders": true,
+    "photo_organize_by_date": true,
+    "move_duplicates_to_folder": true,
+    "duplicates_folder": "_Duplicates"
+  },
+  "ui": {
+    "theme": "dark",
+    "window_width": 1400,
+    "window_height": 900,
+    "remember_layout": true
+  },
+  "scheduling": {
+    "enabled": false,
+    "interval_hours": 24,
+    "scan_paths": [],
+    "last_run": null
+  },
+  "ocr": {
+    "enabled": false,
+    "language": "eng",
+    "max_pages": 10
+  },
+  "advanced": {
+    "empty_folder_detection": true,
+    "large_file_threshold_mb": 1000,
+    "disk_usage_analysis": true,
+    "zip_inspection": true,
+    "auto_downloads_cleanup": false,
+    "downloads_path": ""
+  },
+  "database": {
+    "path": "file_organizer.db"
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/organizer.log",
+    "max_size_mb": 10,
+    "backup_count": 5
+  }
+}

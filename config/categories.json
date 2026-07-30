@@ -1,0 +1,18 @@
+{
+  "categories": [
+    {"name": "Documents", "extensions": [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt", ".pages", ".md", ".tex", ".wps"], "keywords": ["document", "report", "letter", "memo", "notes", "resume", "cv", "contract", "invoice", "specification", "proposal", "draft"]},
+    {"name": "Finance", "extensions": [".xls", ".xlsx", ".csv", ".qfx", ".qbo", ".ofx", ".tax", ".money", ".qb2019"], "keywords": ["bank", "statement", "finance", "budget", "tax", "invoice", "payment", "receipt", "account", "transaction", "salary", "payroll", "expense", "investment", "portfolio"]},
+    {"name": "Pictures", "extensions": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".webp", ".heic", ".raw", ".cr2", ".nef", ".arw", ".dng", ".svg", ".ico"], "keywords": ["photo", "image", "picture", "screenshot", "wallpaper", "avatar", "img", "camera", "dsc"]},
+    {"name": "Videos", "extensions": [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg", ".3gp", ".ts", ".vob"], "keywords": ["video", "movie", "clip", "recording", "capture", "film", "trailer", "tutorial", "cam"]},
+    {"name": "Music", "extensions": [".mp3", ".flac", ".wav", ".aac", ".ogg", ".wma", ".m4a", ".alac", ".aiff", ".opus"], "keywords": ["music", "song", "audio", "track", "album", "playlist", "podcast", "sound", "beat"]},
+    {"name": "Downloads", "extensions": [".crdownload", ".part", ".download"], "keywords": ["download", "temp", "partial"]},
+    {"name": "Android", "extensions": [".apk", ".xapk", ".apks", ".aab", ".dex"], "keywords": ["android", "apk", "app", "mobile", "google play", "sideload"]},
+    {"name": "GitHub", "extensions": [".git", ".gitignore", ".gitattributes", ".gitmodules"], "keywords": ["github", "git", "repo", "repository", "clone", "commit", "branch", "readme", "license"]},
+    {"name": "Projects", "extensions": [".py", ".js", ".ts", ".java", ".cpp", ".c", ".h", ".hpp", ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".dart", ".lua", ".r", ".scala", ".sh", ".bat", ".ps1", ".sql", ".html", ".css", ".scss", ".less", ".vue", ".jsx", ".tsx", ".json", ".yaml", ".yml", ".xml", ".toml", ".ini", ".cfg", ".conf", ".makefile", ".cmake", ".gradle", ".sln", ".proj", ".vcxproj"], "keywords": ["project", "source", "code", "script", "build", "compile", "package", "module", "library", "framework", "app", "program", "solution"]},
+    {"name": "eBooks", "extensions": [".epub", ".mobi", ".azw", ".azw3", ".kf8", ".pdb", ".fb2", ".lit", ".lrf"], "keywords": ["ebook", "book", "novel", "kindle", "epub", "chapter", "author", "isbn"]},
+    {"name": "Archives", "extensions": [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".lzma", ".cab", ".iso", ".dmg", ".pkg", ".deb", ".rpm", ".tgz"], "keywords": ["archive", "compressed", "backup", "zip", "bundle"]},
+    {"name": "Installers", "extensions": [".exe", ".msi", ".msp", ".msu", ".appx", ".appxbundle", ".deb", ".rpm", ".dmg", ".pkg", ".snap", ".flatpak"], "keywords": ["install", "setup", "installer", "wizard", "update", "upgrade", "vcredist", "runtime"]},
+    {"name": "Backups", "extensions": [".bak", ".old", ".orig", ".backup", ".dump", ".save", ".swp", ".tmp"], "keywords": ["backup", "bak", "old", "copy", "dump", "snapshot", "restore"]},
+    {"name": "Miscellaneous", "extensions": [], "keywords": []}
+  ]
+}
