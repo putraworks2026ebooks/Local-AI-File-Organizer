@@ -57,7 +57,7 @@ class DatabaseManager:
         "size_bytes": 0,
     }
 
-    def upsert_file(self, file_data: dict) -> None:
+    def upsert_file(self, file_data: dict, commit: bool = True) -> None:
         """Insert or update a file record."""
         columns = ["file_path", "file_name", "extension", "size_bytes", "sha256",
                     "category", "subcategory", "metadata_json", "content_summary",
@@ -80,7 +80,8 @@ class DatabaseManager:
             ON CONFLICT(file_path) DO UPDATE SET {updates}
         """
         self.conn.execute(sql, values)
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
     def get_file_by_path(self, path: str) -> Optional[dict]:
         """Get file record by path."""

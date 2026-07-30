@@ -1,6 +1,7 @@
 """
 Analyze view for Local AI File Organizer.
 Uses Ollama to classify files into categories with preview before organizing.
+Falls back to rule-based classification when Ollama is not available.
 """
 
 import json
@@ -10,7 +11,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox, QMessageBox,
     QCheckBox, QComboBox, QTextEdit, QSplitter, QTabWidget
 )
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Qt, Signal, QThread, QTimer
 
 from core.ollama_client import OllamaClient
 from core.metadata import MetadataExtractor
@@ -20,8 +21,57 @@ from database.db_manager import DatabaseManager
 from utils.logger import get_logger
 
 
+class RuleBasedClassifier:
+    """Fallback classifier that uses file extensions and keywords when Ollama is not available."""
+
+    # Extension -> category mapping
+    EXTENSION_MAP = {
+        # Documents
+        ".pdf": "Documents", ".doc": "Documents", ".docx": "Documents",
+        ".txt": "Documents", ".rtf": "Documents", ".odt": "Documents",
+        ".pages": "Documents", ".md": "Documents",
+        # Spreadsheets
+        ".xls": "Spreadsheets", ".xlsx": "Spreadsheets", ".csv": "Spreadsheets",
+        ".ods": "Spreadsheets", ".numbers": "Spreadsheets",
+        # Presentations
+        ".ppt": "Presentations", ".pptx": "Presentations", ".key": "Presentations",
+        ".odp": "Presentations",
+        # Images
+        ".jpg": "Images", ".jpeg": "Images", ".png": "Images", ".gif": "Images",
+        ".bmp": "Images", ".tiff": "Images", ".svg": "Images", ".webp": "Images",
+        ".heic": "Images", ".raw": "Images", ".psd": "Images", ".ai": "Images",
+        # Videos
+        ".mp4": "Videos", ".avi": "Videos", ".mkv": "Videos", ".mov": "Videos",
+        ".wmv": "Videos", ".flv": "Videos", ".webm": "Videos", ".m4v": "Videos",
+        # Audio
+        ".mp3": "Audio", ".wav": "Audio", ".flac": "Audio", ".aac": "Audio",
+        ".ogg": "Audio", ".m4a": "Audio", ".wma": "Audio",
+        # Archives
+        ".zip": "Archives", ".rar": "Archives", ".7z": "Archives", ".tar": "Archives",
+        ".gz": "Archives", ".bz2": "Archives", ".iso": "Archives",
+        # Code
+        ".py": "Code", ".js": "Code", ".ts": "Code", ".html": "Code", ".css": "Code",
+        ".java": "Code", ".cpp": "Code", ".c": "Code", ".h": "Code", ".cs": "Code",
+        ".go": "Code", ".rs": "Code", ".rb": "Code", ".php": "Code", ".sql": "Code",
+        ".json": "Code", ".xml": "Code", ".yaml": "Code", ".yml": "Code", ".sh": "Code",
+        # Data
+        ".db": "Data", ".sqlite": "Data", ".sqlite3": "Data",
+    }
+
+    def __init__(self, categories: list[str]):
+        self.categories = [c for c in categories if c != "Miscellaneous"]
+
+    def classify(self, file_data: dict, content_summary: str = None) -> str:
+        """Classify a file based on its extension."""
+        ext = file_data.get("extension", "").lower()
+        category = self.EXTENSION_MAP.get(ext)
+        if category and category in self.categories:
+            return category
+        return "Miscellaneous"
+
+
 class AnalyzeWorker(QThread):
-    """Worker thread for AI analysis."""
+    """Worker thread for AI analysis (or rule-based fallback)."""
 
     progress = Signal(int, int)
     file_analyzed = Signal(str, str)  # file_path, category
@@ -31,7 +81,8 @@ class AnalyzeWorker(QThread):
 
     def __init__(self, files: list[dict], categories: list[str],
                  ollama: OllamaClient, metadata_extractor: MetadataExtractor,
-                 content_reader: ContentReader, ocr: OCRProcessor, db: DatabaseManager):
+                 content_reader: ContentReader, ocr: OCRProcessor, db: DatabaseManager,
+                 use_ai: bool = True):
         super().__init__()
         self.files = files
         self.categories = categories
@@ -40,6 +91,7 @@ class AnalyzeWorker(QThread):
         self.content_reader = content_reader
         self.ocr = ocr
         self.db = db
+        self.use_ai = use_ai and ollama.is_available()
         self._cancel = False
         self.logger = get_logger()
 
@@ -47,13 +99,19 @@ class AnalyzeWorker(QThread):
         self._cancel = True
 
     def run(self):
-        """Run AI analysis on all files."""
+        """Run AI or rule-based analysis on all files."""
         results = {}
         total = len(self.files)
         processed = 0
         errors = 0
 
-        self.status_update.emit(f"Analyzing {total} files with {self.ollama.model}...")
+        if self.use_ai:
+            self.status_update.emit(f"Analyzing {total} files with {self.ollama.model}...")
+        else:
+            self.status_update.emit(f"Analyzing {total} files (rule-based, no AI)...")
+
+        # Use rule-based classifier as fallback
+        rule_classifier = RuleBasedClassifier(self.categories) if not self.use_ai else None
 
         for file_data in self.files:
             if self._cancel:
@@ -63,49 +121,59 @@ class AnalyzeWorker(QThread):
             file_name = file_data.get("file_name", "unknown")
 
             try:
-                # Extract metadata
-                metadata = {}
-                try:
-                    metadata = self.metadata_extractor.extract(file_path)
-                except Exception:
-                    pass
-
-                # Read content for documents
-                content_summary = None
-                try:
-                    content_summary = self.content_reader.read_summary(file_path, max_length=500)
-                except Exception:
-                    pass
-
-                # OCR for scanned PDFs (if enabled)
-                if not content_summary and self.ocr.is_available():
+                if self.use_ai:
+                    # Extract metadata
+                    metadata = {}
                     try:
-                        content_summary = self.ocr.extract_text(file_path, max_length=500)
+                        metadata = self.metadata_extractor.extract(file_path)
                     except Exception:
                         pass
 
-                # Classify with Ollama
-                file_info = {
-                    "file_name": file_name,
-                    "extension": file_data.get("extension", ""),
-                    "metadata": metadata,
-                }
+                    # Read content for documents
+                    content_summary = None
+                    try:
+                        content_summary = self.content_reader.read_summary(file_path, max_length=500)
+                    except Exception:
+                        pass
 
-                category = self.ollama.classify_file(file_info, self.categories, content_summary)
+                    # OCR for scanned PDFs (if enabled)
+                    if not content_summary and self.ocr.is_available():
+                        try:
+                            content_summary = self.ocr.extract_text(file_path, max_length=500)
+                        except Exception:
+                            pass
 
-                if category:
+                    # Classify with Ollama
+                    file_info = {
+                        "file_name": file_name,
+                        "extension": file_data.get("extension", ""),
+                        "metadata": metadata,
+                    }
+
+                    category = self.ollama.classify_file(file_info, self.categories, content_summary)
+
+                    if category:
+                        results[file_path] = category
+                        self.file_analyzed.emit(file_path, category)
+
+                        # Update database
+                        file_data["category"] = category
+                        file_data["metadata_json"] = json.dumps(metadata, default=str) if metadata else None
+                        file_data["content_summary"] = content_summary
+                        file_data["analyzed_at"] = json.dumps({"timestamp": None})
+                        self.db.upsert_file(file_data)
+                    else:
+                        results[file_path] = "Miscellaneous"
+                        errors += 1
+                else:
+                    # Rule-based fallback
+                    category = rule_classifier.classify(file_data)
                     results[file_path] = category
                     self.file_analyzed.emit(file_path, category)
 
-                    # Update database
                     file_data["category"] = category
-                    file_data["metadata_json"] = json.dumps(metadata, default=str) if metadata else None
-                    file_data["content_summary"] = content_summary
-                    file_data["analyzed_at"] = json.dumps({"timestamp": None})
+                    file_data["analyzed_at"] = json.dumps({"timestamp": None, "method": "rule-based"})
                     self.db.upsert_file(file_data)
-                else:
-                    results[file_path] = "Miscellaneous"
-                    errors += 1
 
             except Exception as e:
                 self.logger.error(f"Analysis error for {file_name}: {e}")
@@ -116,9 +184,11 @@ class AnalyzeWorker(QThread):
             self.progress.emit(processed, total)
 
             if processed % 100 == 0:
-                self.status_update.emit(f"Analyzed {processed}/{total} files ({errors} errors)")
+                method = "AI" if self.use_ai else "rule-based"
+                self.status_update.emit(f"Analyzed {processed}/{total} files ({errors} errors) [{method}]")
 
-        self.status_update.emit(f"Analysis complete: {processed} files, {errors} errors")
+        method = "AI" if self.use_ai else "rule-based"
+        self.status_update.emit(f"Analysis complete: {processed} files, {errors} errors [{method}]")
         self.finished_analysis.emit(results)
 
 
@@ -141,6 +211,9 @@ class AnalyzeView(QWidget):
         self.analyze_worker = None
         self.logger = get_logger()
         self._init_ui()
+
+        # Check AI status on init (deferred to avoid blocking UI)
+        QTimer.singleShot(500, self._check_ai_status)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -168,6 +241,19 @@ class AnalyzeView(QWidget):
 
         status_group.setLayout(status_layout)
         layout.addWidget(status_group)
+
+        # Info banner for no-AI mode
+        self.no_ai_banner = QLabel(
+            "⚠️ Ollama not detected. Files will be classified by extension (rule-based mode).\n"
+            "Install Ollama from ollama.ai and pull a model for AI-powered classification."
+        )
+        self.no_ai_banner.setStyleSheet(
+            "background-color: #fff3cd; color: #856404; padding: 10px; "
+            "border-radius: 5px; border: 1px solid #ffeaa7;"
+        )
+        self.no_ai_banner.setWordWrap(True)
+        self.no_ai_banner.setVisible(False)
+        layout.addWidget(self.no_ai_banner)
 
         # Category preview
         preview_group = QGroupBox("Category Preview")
@@ -211,9 +297,6 @@ class AnalyzeView(QWidget):
         self.status_label = QLabel("")
         layout.addWidget(self.status_label)
 
-        # Check AI on init
-        QTimer_singleShot = self._check_ai_status
-
     def set_files(self, files: list[dict]):
         """Set the files to analyze."""
         self.files = files
@@ -225,6 +308,7 @@ class AnalyzeView(QWidget):
         if self.ollama.is_available():
             self.ai_status.setText("✅ Connected")
             self.ai_status.setStyleSheet("font-weight: bold; color: green;")
+            self.no_ai_banner.setVisible(False)
 
             models = self.ollama.list_models()
             self.model_combo.clear()
@@ -236,25 +320,35 @@ class AnalyzeView(QWidget):
         else:
             self.ai_status.setText("❌ Not Connected")
             self.ai_status.setStyleSheet("font-weight: bold; color: red;")
+            self.no_ai_banner.setVisible(True)
             self.model_combo.clear()
             self.model_combo.addItem("No models available")
 
     def _start_analysis(self):
-        """Start AI analysis."""
+        """Start AI or rule-based analysis."""
         if not self.files:
             QMessageBox.warning(self, "No Files", "Scan files first before analyzing.")
             return
 
-        if not self.ollama.is_available():
-            QMessageBox.warning(self, "AI Not Available",
-                                "Ollama server is not running.\n"
-                                "Start Ollama and ensure it's reachable at the configured URL.")
-            return
+        use_ai = self.ollama.is_available()
 
-        # Update model from combo
-        model = self.model_combo.currentText()
-        if model:
-            self.ollama.update_settings(model=model)
+        if not use_ai:
+            # Confirm rule-based fallback
+            reply = QMessageBox.question(
+                self, "AI Not Available",
+                "Ollama is not running. Files will be classified by extension only (rule-based mode).\n\n"
+                "This is less accurate than AI classification but works without any setup.\n\n"
+                "Continue with rule-based analysis?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if reply != QMessageBox.Yes:
+                return
+        else:
+            # Update model from combo
+            model = self.model_combo.currentText()
+            if model and model != "No models available":
+                self.ollama.update_settings(model=model)
 
         # Get categories from config
         categories_path = Path(__file__).parent.parent / "config" / "categories.json"
@@ -270,23 +364,26 @@ class AnalyzeView(QWidget):
         self.progress_bar.setValue(0)
         self.analyze_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
-        self.preview_table.setRowCount(0)
+
+        method_label = "AI" if use_ai else "rule-based"
+        self.status_label.setText(f"Analyzing {len(self.files)} files ({method_label})...")
 
         self.analyze_worker = AnalyzeWorker(
             self.files, categories, self.ollama,
-            self.metadata_extractor, self.content_reader, self.ocr, self.db
+            self.metadata_extractor, self.content_reader, self.ocr,
+            self.db, use_ai=use_ai
         )
         self.analyze_worker.progress.connect(self._on_progress)
         self.analyze_worker.file_analyzed.connect(self._on_file_analyzed)
         self.analyze_worker.status_update.connect(self._on_status)
-        self.analyze_worker.error.connect(self._on_error)
         self.analyze_worker.finished_analysis.connect(self._on_finished)
         self.analyze_worker.start()
 
     def _cancel_analysis(self):
-        """Cancel analysis."""
+        """Cancel ongoing analysis."""
         if self.analyze_worker and self.analyze_worker.isRunning():
             self.analyze_worker.cancel()
+            self.status_label.setText("Cancelling...")
             self.analyze_worker.wait(3000)
 
     def _on_progress(self, current, total):
@@ -294,27 +391,22 @@ class AnalyzeView(QWidget):
         self.progress_bar.setValue(current)
 
     def _on_file_analyzed(self, file_path: str, category: str):
+        """Add a result to the preview table."""
         row = self.preview_table.rowCount()
-        self.preview_table.setRowCount(row + 1)
+        self.preview_table.insertRow(row)
         self.preview_table.setItem(row, 0, QTableWidgetItem(Path(file_path).name))
         self.preview_table.setItem(row, 1, QTableWidgetItem(file_path))
         self.preview_table.setItem(row, 2, QTableWidgetItem(category))
-        self.preview_table.setItem(row, 3, QTableWidgetItem("AI"))
-        self.preview_table.scrollToBottom()
+        self.preview_table.setItem(row, 3, QTableWidgetItem("—"))
 
     def _on_status(self, msg: str):
         self.status_label.setText(msg)
 
-    def _on_error(self, msg: str):
-        self.status_label.setText(f"Error: {msg}")
-
     def _on_finished(self, results: dict):
+        """Handle analysis completion."""
         self.progress_bar.setVisible(False)
         self.analyze_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"Analysis complete: {len(results)} files classified")
+
         self.analysis_complete.emit(results)
-
-
-# Import for QTimer singleShot
-from PySide6.QtCore import QTimer

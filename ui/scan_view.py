@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QGroupBox, QMessageBox, QCheckBox, QSpinBox, QComboBox, QMenu, QInputDialog,
     QStyle, QStyleFactory
 )
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Qt, Signal, QThread, QTimer
 
 from core.scanner import ScanWorker
 from utils.helpers import format_file_size
@@ -29,6 +29,7 @@ class ScanView(QWidget):
         self.scan_worker = None
         self.scan_paths: list[str] = []
         self.scanned_files: list[dict] = []
+        self._db_batch_count = 0
         self._init_ui()
 
     def _init_ui(self):
@@ -126,6 +127,8 @@ class ScanView(QWidget):
         self.results_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.results_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.results_table.setAlternatingRowColors(True)
+        # Performance: don't update during scroll/resize
+        self.results_table.setUpdatesEnabled(True)
         results_layout.addWidget(self.results_table)
 
         results_group.setLayout(results_layout)
@@ -163,6 +166,7 @@ class ScanView(QWidget):
         scan_config["max_file_size_mb"] = self.max_size_spin.value()
 
         self.scanned_files = []
+        self._db_batch_count = 0
         self.results_table.setRowCount(0)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
@@ -192,21 +196,41 @@ class ScanView(QWidget):
         self.scan_progress.emit(current, total)
 
     def _on_file_found(self, file_data: dict):
-        """Handle newly found file."""
+        """Handle newly found file — append only, never rebuild."""
         self.scanned_files.append(file_data)
 
-        # Save to database
+        # Save to database (batch: commit every 100 files, not every file)
         try:
             self.db.upsert_file(file_data)
+            self._db_batch_count += 1
+            if self._db_batch_count >= 100:
+                self.db.conn.commit()
+                self._db_batch_count = 0
         except Exception:
             pass
 
-        # Add to table (throttled - every 100th file)
-        if len(self.scanned_files) % 10 == 0:
-            self._update_results_table()
+        # Append a single row to the table instead of rebuilding all rows
+        # Only update UI every 50 files to avoid flooding the event loop
+        count = len(self.scanned_files)
+        if count % 50 == 0:
+            self._append_table_row(file_data)
+            # Auto-scroll only occasionally
+            if count % 500 == 0:
+                self.results_table.scrollToBottom()
+
+    def _append_table_row(self, file_data: dict):
+        """Append a single row to the results table — O(1), not O(n)."""
+        row = self.results_table.rowCount()
+        self.results_table.insertRow(row)
+        self.results_table.setItem(row, 0, QTableWidgetItem(file_data.get("file_name", "")))
+        self.results_table.setItem(row, 1, QTableWidgetItem(file_data.get("file_path", "")))
+        self.results_table.setItem(row, 2, QTableWidgetItem(format_file_size(file_data.get("size_bytes", 0))))
+        self.results_table.setItem(row, 3, QTableWidgetItem(file_data.get("extension", "")))
+        self.results_table.setItem(row, 4, QTableWidgetItem(file_data.get("scanned_at", "")))
 
     def _update_results_table(self):
-        """Update the results table with scanned files."""
+        """Final full update of the results table after scan completes."""
+        self.results_table.setRowCount(0)
         self.results_table.setRowCount(len(self.scanned_files))
         for i, f in enumerate(self.scanned_files):
             self.results_table.setItem(i, 0, QTableWidgetItem(f.get("file_name", "")))
@@ -214,8 +238,6 @@ class ScanView(QWidget):
             self.results_table.setItem(i, 2, QTableWidgetItem(format_file_size(f.get("size_bytes", 0))))
             self.results_table.setItem(i, 3, QTableWidgetItem(f.get("extension", "")))
             self.results_table.setItem(i, 4, QTableWidgetItem(f.get("scanned_at", "")))
-
-        self.results_table.scrollToBottom()
 
     def _on_status(self, msg: str):
         """Handle status updates."""
@@ -227,6 +249,13 @@ class ScanView(QWidget):
 
     def _on_finished(self, total_files: int, total_size: int):
         """Handle scan completion."""
+        # Flush any remaining DB batch
+        try:
+            self.db.conn.commit()
+        except Exception:
+            pass
+
+        # Final table update
         self._update_results_table()
         self.progress_bar.setVisible(False)
         self.scan_btn.setEnabled(True)
