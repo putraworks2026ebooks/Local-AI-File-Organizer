@@ -24,38 +24,61 @@ from utils.logger import get_logger
 class RuleBasedClassifier:
     """Fallback classifier that uses file extensions and keywords when Ollama is not available."""
 
-    # Extension -> category mapping
+    # Extension -> category mapping (must match config/categories.json names)
     EXTENSION_MAP = {
         # Documents
         ".pdf": "Documents", ".doc": "Documents", ".docx": "Documents",
         ".txt": "Documents", ".rtf": "Documents", ".odt": "Documents",
-        ".pages": "Documents", ".md": "Documents",
-        # Spreadsheets
-        ".xls": "Spreadsheets", ".xlsx": "Spreadsheets", ".csv": "Spreadsheets",
-        ".ods": "Spreadsheets", ".numbers": "Spreadsheets",
-        # Presentations
-        ".ppt": "Presentations", ".pptx": "Presentations", ".key": "Presentations",
-        ".odp": "Presentations",
-        # Images
-        ".jpg": "Images", ".jpeg": "Images", ".png": "Images", ".gif": "Images",
-        ".bmp": "Images", ".tiff": "Images", ".svg": "Images", ".webp": "Images",
-        ".heic": "Images", ".raw": "Images", ".psd": "Images", ".ai": "Images",
+        ".pages": "Documents", ".md": "Documents", ".tex": "Documents", ".wps": "Documents",
+        # Finance (spreadsheets, financial)
+        ".xls": "Finance", ".xlsx": "Finance", ".csv": "Finance",
+        ".qfx": "Finance", ".qbo": "Finance", ".ofx": "Finance",
+        ".tax": "Finance", ".money": "Finance",
+        # Pictures (images, photos)
+        ".jpg": "Pictures", ".jpeg": "Pictures", ".png": "Pictures", ".gif": "Pictures",
+        ".bmp": "Pictures", ".tiff": "Pictures", ".tif": "Pictures", ".svg": "Pictures",
+        ".webp": "Pictures", ".heic": "Pictures", ".raw": "Pictures", ".ico": "Pictures",
+        ".cr2": "Pictures", ".nef": "Pictures", ".arw": "Pictures", ".dng": "Pictures",
         # Videos
         ".mp4": "Videos", ".avi": "Videos", ".mkv": "Videos", ".mov": "Videos",
         ".wmv": "Videos", ".flv": "Videos", ".webm": "Videos", ".m4v": "Videos",
-        # Audio
-        ".mp3": "Audio", ".wav": "Audio", ".flac": "Audio", ".aac": "Audio",
-        ".ogg": "Audio", ".m4a": "Audio", ".wma": "Audio",
+        ".mpg": "Videos", ".mpeg": "Videos", ".3gp": "Videos", ".ts": "Videos",
+        ".vob": "Videos",
+        # Music (audio)
+        ".mp3": "Music", ".wav": "Music", ".flac": "Music", ".aac": "Music",
+        ".ogg": "Music", ".m4a": "Music", ".wma": "Music", ".alac": "Music",
+        ".aiff": "Music", ".opus": "Music",
+        # Downloads
+        ".crdownload": "Downloads", ".part": "Downloads", ".download": "Downloads",
+        # Android
+        ".apk": "Android", ".xapk": "Android", ".apks": "Android",
+        ".aab": "Android", ".dex": "Android",
+        # Projects (code, scripts)
+        ".py": "Projects", ".js": "Projects", ".ts": "Projects", ".html": "Projects",
+        ".css": "Projects", ".scss": "Projects", ".less": "Projects", ".vue": "Projects",
+        ".jsx": "Projects", ".tsx": "Projects",
+        ".java": "Projects", ".cpp": "Projects", ".c": "Projects", ".h": "Projects",
+        ".hpp": "Projects", ".cs": "Projects", ".go": "Projects", ".rs": "Projects",
+        ".rb": "Projects", ".php": "Projects", ".swift": "Projects", ".kt": "Projects",
+        ".dart": "Projects", ".lua": "Projects", ".r": "Projects",
+        ".sh": "Projects", ".bat": "Projects", ".ps1": "Projects", ".sql": "Projects",
+        ".json": "Projects", ".xml": "Projects", ".yaml": "Projects", ".yml": "Projects",
+        ".toml": "Projects", ".ini": "Projects", ".cfg": "Projects", ".conf": "Projects",
+        # eBooks
+        ".epub": "eBooks", ".mobi": "eBooks", ".azw": "eBooks", ".azw3": "eBooks",
+        ".kf8": "eBooks", ".pdb": "eBooks", ".fb2": "eBooks", ".lit": "eBooks", ".lrf": "eBooks",
         # Archives
         ".zip": "Archives", ".rar": "Archives", ".7z": "Archives", ".tar": "Archives",
-        ".gz": "Archives", ".bz2": "Archives", ".iso": "Archives",
-        # Code
-        ".py": "Code", ".js": "Code", ".ts": "Code", ".html": "Code", ".css": "Code",
-        ".java": "Code", ".cpp": "Code", ".c": "Code", ".h": "Code", ".cs": "Code",
-        ".go": "Code", ".rs": "Code", ".rb": "Code", ".php": "Code", ".sql": "Code",
-        ".json": "Code", ".xml": "Code", ".yaml": "Code", ".yml": "Code", ".sh": "Code",
-        # Data
-        ".db": "Data", ".sqlite": "Data", ".sqlite3": "Data",
+        ".gz": "Archives", ".bz2": "Archives", ".xz": "Archives", ".lzma": "Archives",
+        ".cab": "Archives", ".iso": "Archives", ".dmg": "Archives", ".pkg": "Archives",
+        ".tgz": "Archives",
+        # Installers
+        ".exe": "Installers", ".msi": "Installers", ".msp": "Installers", ".msu": "Installers",
+        ".appx": "Installers", ".deb": "Installers", ".rpm": "Installers", ".snap": "Installers",
+        ".flatpak": "Installers",
+        # Backups
+        ".bak": "Backups", ".old": "Backups", ".orig": "Backups", ".backup": "Backups",
+        ".dump": "Backups", ".save": "Backups", ".swp": "Backups", ".tmp": "Backups",
     }
 
     def __init__(self, categories: list[str]):
@@ -111,7 +134,8 @@ class AnalyzeWorker(QThread):
             self.status_update.emit(f"Analyzing {total} files (rule-based, no AI)...")
 
         # Use rule-based classifier as fallback
-        rule_classifier = RuleBasedClassifier(self.categories) if not self.use_ai else None
+        # Always create rule_classifier — used as fallback even in AI mode
+        rule_classifier = RuleBasedClassifier(self.categories)
 
         for file_data in self.files:
             if self._cancel:
@@ -151,6 +175,12 @@ class AnalyzeWorker(QThread):
                     }
 
                     category = self.ollama.classify_file(file_info, self.categories, content_summary)
+
+                    # If AI fails or returns Miscellaneous, try rule-based as fallback
+                    if not category or category == "Miscellaneous":
+                        rule_category = rule_classifier.classify(file_data)
+                        if rule_category and rule_category != "Miscellaneous":
+                            category = rule_category
 
                     if category:
                         results[file_path] = category
