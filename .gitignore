@@ -3,7 +3,8 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
+build/work/
+build/dist/
 dist/
 *.egg-info/
 *.egg
