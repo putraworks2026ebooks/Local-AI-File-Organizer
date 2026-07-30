@@ -50,12 +50,27 @@ class DatabaseManager:
 
     # --- File operations ---
 
+    # Default values for integer columns that must not be NULL
+    _FILE_DEFAULTS = {
+        "is_deleted": 0,
+        "is_duplicate": 0,
+        "size_bytes": 0,
+    }
+
     def upsert_file(self, file_data: dict) -> None:
         """Insert or update a file record."""
         columns = ["file_path", "file_name", "extension", "size_bytes", "sha256",
                     "category", "subcategory", "metadata_json", "content_summary",
                     "scanned_at", "analyzed_at", "is_duplicate", "duplicate_of", "is_deleted"]
-        values = [file_data.get(c) for c in columns]
+
+        # Build values with defaults for critical integer columns
+        values = []
+        for c in columns:
+            val = file_data.get(c)
+            if val is None and c in self._FILE_DEFAULTS:
+                val = self._FILE_DEFAULTS[c]
+            values.append(val)
+
         placeholders = ", ".join(["?"] * len(columns))
         col_str = ", ".join(columns)
         updates = ", ".join([f"{c}=excluded.{c}" for c in columns if c != "file_path"])
