@@ -22,15 +22,26 @@ class ScanView(QWidget):
     scan_complete = Signal(list, int)
     scan_progress = Signal(int, int)
 
-    def __init__(self, config: dict, db):
+    def __init__(self, config: dict, db, ollama=None):
         super().__init__()
         self.config = config
         self.db = db
+        self.ollama = ollama
         self.scan_worker = None
         self.scan_paths: list[str] = []
         self.scanned_files: list[dict] = []
         self._db_batch_count = 0
         self._init_ui()
+        # Check if Ollama is available and hide the banner if it is
+        if self.ollama:
+            QTimer.singleShot(1000, self._check_ai_status)
+
+    def _check_ai_status(self):
+        """Toggle the info banner based on Ollama availability."""
+        if self.ollama and self.ollama.is_available():
+            self.no_ai_info.setVisible(False)
+        else:
+            self.no_ai_info.setVisible(True)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -39,6 +50,18 @@ class ScanView(QWidget):
         title = QLabel("🔍 Scan")
         title.setStyleSheet("font-size: 20px; font-weight: bold; padding: 10px;")
         layout.addWidget(title)
+
+        # Info banner: scanning works without Ollama
+        self.no_ai_info = QLabel(
+            "ℹ️ Scanning works without Ollama. AI classification (Analyze tab) is optional.\n"
+            "Install Ollama from ollama.ai for smarter, AI-powered file classification."
+        )
+        self.no_ai_info.setStyleSheet(
+            "background-color: #e8f4fd; color: #1a73e8; padding: 8px 12px; "
+            "border-radius: 5px; border: 1px solid #d0e3fa; font-size: 12px;"
+        )
+        self.no_ai_info.setWordWrap(True)
+        layout.addWidget(self.no_ai_info)
 
         # Scan paths section
         paths_group = QGroupBox("Scan Locations")

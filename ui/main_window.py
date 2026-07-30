@@ -104,7 +104,7 @@ class MainWindow(QMainWindow):
 
         # Create views
         self.dashboard = DashboardWidget(self.db, self.config)
-        self.scan_view = ScanView(self.config, self.db)
+        self.scan_view = ScanView(self.config, self.db, self.ollama)
         self.analyze_view = AnalyzeView(self.config, self.db, self.ollama,
                                          self.metadata_extractor, self.content_reader, self.ocr)
         self.organize_view = OrganizeView(self.config, self.db, self.organizer)
@@ -312,6 +312,8 @@ class MainWindow(QMainWindow):
             return
 
         self.status_bar.showMessage("Undoing all operations...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate
 
         class UndoWorker(QThread):
             from PySide6.QtCore import Signal
@@ -328,6 +330,7 @@ class MainWindow(QMainWindow):
         self._undo_worker.start()
 
     def _on_undo_all_complete(self, results):
+        self.progress_bar.setVisible(False)
         success = sum(1 for s, _ in results if s)
         total = len(results)
         QMessageBox.information(self, "Undo All", f"Undone {success}/{total} operations.")
@@ -341,6 +344,8 @@ class MainWindow(QMainWindow):
             return
 
         self.status_bar.showMessage("Scanning for empty folders...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate
         from PySide6.QtCore import QThread
 
         class EmptyFolderWorker(QThread):
@@ -362,6 +367,7 @@ class MainWindow(QMainWindow):
         self._empty_worker.start()
 
     def _on_empty_folders_found(self, empty: list):
+        self.progress_bar.setVisible(False)
         if empty:
             self.logs_view.append_log(f"Found {len(empty)} empty folders:")
             for f in empty[:200]:
@@ -371,22 +377,48 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("", 3000)
 
     def _find_large_files(self):
-        """Find large files."""
+        """Find large files — instant (just a DB query, no threading needed)."""
         threshold, ok = QInputDialog.getInt(
             self, "Large File Finder",
             "Minimum file size (MB):", 1000, 1, 100000,
         )
-        if ok:
-            files = self.db.get_all_files()
-            large = self.organizer.find_large_files(files, threshold)
-            if large:
-                from utils.helpers import format_file_size
-                self.logs_view.append_log(f"Found {len(large)} files > {threshold}MB:")
-                for f in large[:50]:
-                    size = format_file_size(f.get("size_bytes", 0))
-                    self.logs_view.append_log(f"  {size}  {f.get('file_path', '')}")
-            else:
-                QMessageBox.information(self, "Large Files", "No large files found.")
+        if not ok:
+            return
+
+        self.status_bar.showMessage("Finding large files...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate
+
+        from PySide6.QtCore import QTimer
+
+        class LargeFilesWorker(QThread):
+            from PySide6.QtCore import Signal
+            finished_search = Signal(list, int)
+            def __init__(self, db, organizer, threshold):
+                super().__init__()
+                self.db = db
+                self.organizer = organizer
+                self.threshold = threshold
+            def run(self):
+                files = self.db.get_all_files()
+                large = self.organizer.find_large_files(files, self.threshold)
+                self.finished_search.emit(large, self.threshold)
+
+        self._large_worker = LargeFilesWorker(self.db, self.organizer, threshold)
+        self._large_worker.finished_search.connect(lambda large, t: self._on_large_files_found(large, t))
+        self._large_worker.start()
+
+    def _on_large_files_found(self, large: list, threshold: int):
+        self.progress_bar.setVisible(False)
+        self.status_bar.showMessage("", 3000)
+        if large:
+            from utils.helpers import format_file_size
+            self.logs_view.append_log(f"Found {len(large)} files > {threshold}MB:")
+            for f in large[:50]:
+                size = format_file_size(f.get("size_bytes", 0))
+                self.logs_view.append_log(f"  {size}  {f.get('file_path', '')}")
+        else:
+            QMessageBox.information(self, "Large Files", "No large files found.")
 
     def _disk_analysis(self):
         """Show disk usage analysis."""
@@ -411,6 +443,8 @@ class MainWindow(QMainWindow):
             return
 
         self.status_bar.showMessage("Exporting...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate
 
         class ExportWorker(QThread):
             from PySide6.QtCore import Signal
@@ -443,6 +477,7 @@ class MainWindow(QMainWindow):
         self._export_worker.start()
 
     def _on_export_complete(self, ok: bool, msg: str):
+        self.progress_bar.setVisible(False)
         if ok:
             self.status_bar.showMessage(f"Exported to {msg}", 3000)
         else:
@@ -454,7 +489,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "About Local AI File Organizer",
             "<h3>Local AI File Organizer</h3>"
-            "<p>Version 1.0.0</p>"
+            "<p>Version 1.2 — Full Performance Optimization</p>"
             "<p>A completely local AI-powered file organizer for Windows 10/11.</p>"
             "<p>Powered by Ollama for AI classification. No cloud services required.</p>"
             "<p>All processing happens on your machine.</p>",
