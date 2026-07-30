@@ -1,0 +1,88 @@
+name: Build Windows EXE
+
+on:
+  # Trigger manually from GitHub Actions tab
+  workflow_dispatch:
+  # Auto-build on pushes to main
+  push:
+    branches: [main]
+    paths:
+      - 'core/**'
+      - 'database/**'
+      - 'ui/**'
+      - 'utils/**'
+      - 'config/**'
+      - 'build/**'
+      - 'main.py'
+      - 'requirements.txt'
+      - '.github/workflows/build-exe.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          python -m pytest tests/ -v
+
+      - name: Build EXE with PyInstaller
+        shell: pwsh
+        run: |
+          python -m PyInstaller build/build.spec --noconfirm --clean --distpath dist --workpath build/work
+
+      - name: List build output
+        shell: pwsh
+        run: |
+          Write-Host "Build output:"
+          Get-ChildItem -Path dist/LocalAIFileOrganizer -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
+          $exePath = "dist/LocalAIFileOrganizer/LocalAIFileOrganizer.exe"
+          if (Test-Path $exePath) {
+            $size = (Get-Item $exePath).Length / 1MB
+            Write-Host "EXE size: $([math]::Round($size, 1)) MB"
+          }
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalAIFileOrganizer-Windows-EXE
+          path: dist/LocalAIFileOrganizer/
+          retention-days: 30
+
+      - name: Create zip distribution
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/LocalAIFileOrganizer/* -DestinationPath dist/LocalAIFileOrganizer.zip
+
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalAIFileOrganizer-Windows-ZIP
+          path: dist/LocalAIFileOrganizer.zip
+          retention-days: 30
+
+      - name: Create release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/LocalAIFileOrganizer.zip
+          draft: true
+          name: Release ${{ github.ref_name }}
