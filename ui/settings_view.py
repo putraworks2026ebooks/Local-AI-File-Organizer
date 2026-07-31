@@ -16,6 +16,7 @@ from PySide6.QtCore import Qt, Signal
 
 from utils.config import ConfigManager
 from core.ollama_client import OllamaClient
+from core.cloud_ai_client import CloudAIClient
 from database.db_manager import DatabaseManager
 
 
@@ -69,38 +70,148 @@ class SettingsView(QWidget):
         layout.addLayout(btn_layout)
 
     def _build_ai_tab(self) -> QWidget:
-        """Build AI / Ollama settings tab."""
+        """Build AI settings tab — local Ollama or cloud API."""
         tab = QWidget()
-        layout = QFormLayout(tab)
+        layout = QVBoxLayout(tab)
+
         ai_config = self.config_manager.ollama_settings
+        cloud_config = self.config_manager.config.get("cloud_ai", {})
+
+        # Provider selector
+        provider_group = QGroupBox("AI Provider")
+        provider_layout = QFormLayout(provider_group)
+
+        self.ai_provider = QComboBox()
+        self.ai_provider.addItem("Local (Ollama)", "local")
+        self.ai_provider.addItem("Cloud (OpenAI-compatible)", "cloud")
+        current_provider = ai_config.get("ai_provider", "local")
+        idx = self.ai_provider.findData(current_provider)
+        if idx >= 0:
+            self.ai_provider.setCurrentIndex(idx)
+        self.ai_provider.currentIndexChanged.connect(self._toggle_ai_provider)
+        provider_layout.addRow("AI Engine:", self.ai_provider)
+
+        # Quick provider presets for cloud
+        self.cloud_provider_combo = QComboBox()
+        self.cloud_provider_combo.addItem("OpenAI", "https://api.openai.com/v1")
+        self.cloud_provider_combo.addItem("Groq", "https://api.groq.com/openai/v1")
+        self.cloud_provider_combo.addItem("OpenRouter", "https://openrouter.ai/api/v1")
+        self.cloud_provider_combo.addItem("Together AI", "https://api.together.xyz/v1")
+        self.cloud_provider_combo.addItem("Custom", "")
+        current_base = cloud_config.get("base_url", "https://api.openai.com/v1")
+        found = False
+        for i in range(self.cloud_provider_combo.count()):
+            if self.cloud_provider_combo.itemData(i) == current_base:
+                self.cloud_provider_combo.setCurrentIndex(i)
+                found = True
+                break
+        if not found:
+            self.cloud_provider_combo.setCurrentIndex(4)  # Custom
+            self.cloud_provider_combo.setItemData(4, current_base)
+        self.cloud_provider_combo.currentIndexChanged.connect(self._on_cloud_provider_changed)
+        provider_layout.addRow("Cloud Provider:", self.cloud_provider_combo)
+
+        layout.addWidget(provider_group)
+
+        # --- Local (Ollama) settings ---
+        self.local_group = QGroupBox("Local AI (Ollama)")
+        local_layout = QFormLayout(self.local_group)
 
         self.ai_url = QLineEdit(ai_config.get("server_url", "http://localhost:11434"))
-        layout.addRow("Ollama Server URL:", self.ai_url)
+        local_layout.addRow("Ollama Server URL:", self.ai_url)
 
         self.ai_model = QLineEdit(ai_config.get("model", "qwen2.5:3b"))
-        layout.addRow("AI Model:", self.ai_model)
+        local_layout.addRow("AI Model:", self.ai_model)
 
         test_btn = QPushButton("Test Connection")
         test_btn.clicked.connect(self._test_ollama)
-        layout.addRow("", test_btn)
+        local_layout.addRow("", test_btn)
 
         self.ai_timeout = QSpinBox()
         self.ai_timeout.setRange(5, 600)
         self.ai_timeout.setValue(ai_config.get("timeout", 60))
-        layout.addRow("Timeout (seconds):", self.ai_timeout)
+        local_layout.addRow("Timeout (seconds):", self.ai_timeout)
 
         self.ai_temp = QDoubleSpinBox()
         self.ai_temp.setRange(0.0, 2.0)
         self.ai_temp.setSingleStep(0.1)
         self.ai_temp.setValue(ai_config.get("temperature", 0.1))
-        layout.addRow("Temperature:", self.ai_temp)
+        local_layout.addRow("Temperature:", self.ai_temp)
 
         self.ai_max_tokens = QSpinBox()
         self.ai_max_tokens.setRange(10, 4096)
         self.ai_max_tokens.setValue(ai_config.get("max_tokens", 100))
-        layout.addRow("Max Tokens:", self.ai_max_tokens)
+        local_layout.addRow("Max Tokens:", self.ai_max_tokens)
 
+        layout.addWidget(self.local_group)
+
+        # --- Cloud API settings ---
+        self.cloud_group = QGroupBox("Cloud AI (OpenAI-compatible)")
+        cloud_layout = QFormLayout(self.cloud_group)
+
+        self.cloud_api_key = QLineEdit(cloud_config.get("api_key", ""))
+        self.cloud_api_key.setEchoMode(QLineEdit.Password)
+        self.cloud_api_key.setPlaceholderText("sk-...")
+        cloud_layout.addRow("API Key:", self.cloud_api_key)
+
+        self.cloud_base_url = QLineEdit(cloud_config.get("base_url", "https://api.openai.com/v1"))
+        cloud_layout.addRow("Base URL:", self.cloud_base_url)
+
+        self.cloud_model = QLineEdit(cloud_config.get("model", "gpt-4o-mini"))
+        self.cloud_model.setPlaceholderText("gpt-4o-mini, llama-3.3-70b-versatile, ...")
+        cloud_layout.addRow("Model:", self.cloud_model)
+
+        cloud_test_btn = QPushButton("Test Connection")
+        cloud_test_btn.clicked.connect(self._test_cloud_ai)
+        cloud_layout.addRow("", cloud_test_btn)
+
+        self.cloud_timeout = QSpinBox()
+        self.cloud_timeout.setRange(5, 600)
+        self.cloud_timeout.setValue(cloud_config.get("timeout", 60))
+        cloud_layout.addRow("Timeout (seconds):", self.cloud_timeout)
+
+        self.cloud_temp = QDoubleSpinBox()
+        self.cloud_temp.setRange(0.0, 2.0)
+        self.cloud_temp.setSingleStep(0.1)
+        self.cloud_temp.setValue(cloud_config.get("temperature", 0.1))
+        cloud_layout.addRow("Temperature:", self.cloud_temp)
+
+        self.cloud_max_tokens = QSpinBox()
+        self.cloud_max_tokens.setRange(10, 8192)
+        self.cloud_max_tokens.setValue(cloud_config.get("max_tokens", 500))
+        cloud_layout.addRow("Max Tokens:", self.cloud_max_tokens)
+
+        layout.addWidget(self.cloud_group)
+
+        # Show/hide based on current provider
+        self._toggle_ai_provider()
+
+        layout.addStretch()
         return tab
+
+    def _toggle_ai_provider(self):
+        """Show/hide local vs cloud settings based on provider selection."""
+        is_cloud = self.ai_provider.currentData() == "cloud"
+        self.cloud_group.setVisible(is_cloud)
+        self.local_group.setVisible(not is_cloud)
+        # Show/hide cloud provider combo
+        self.cloud_provider_combo.setVisible(is_cloud)
+
+    def _on_cloud_provider_changed(self):
+        """Update base URL when cloud provider preset changes."""
+        url = self.cloud_provider_combo.currentData()
+        if url:
+            self.cloud_base_url.setText(url)
+        # Suggest model for known providers
+        provider_name = self.cloud_provider_combo.currentText()
+        suggestions = {
+            "OpenAI": "gpt-4o-mini",
+            "Groq": "llama-3.3-70b-versatile",
+            "OpenRouter": "openai/gpt-4o-mini",
+            "Together AI": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        }
+        if provider_name in suggestions and not self.cloud_model.text():
+            self.cloud_model.setText(suggestions[provider_name])
 
     def _build_scan_tab(self) -> QWidget:
         """Build scan settings tab."""
@@ -464,16 +575,54 @@ class SettingsView(QWidget):
                 "Make sure Ollama is running.",
             )
 
+    def _test_cloud_ai(self):
+        """Test cloud AI connection."""
+        api_key = self.cloud_api_key.text().strip()
+        base_url = self.cloud_base_url.text().strip()
+        model = self.cloud_model.text().strip() or "gpt-4o-mini"
+        if not api_key:
+            QMessageBox.warning(self, "No API Key",
+                "Enter your API key first.")
+            return
+        client = CloudAIClient(api_key=api_key, base_url=base_url, model=model)
+        if client.is_available():
+            models = client.list_models()
+            model_list = ", ".join(models[:10]) if models else model
+            QMessageBox.information(
+                self, "Connection OK",
+                f"Connected to cloud AI at {base_url}\n"
+                f"Model: {model}\n"
+                f"Available models: {model_list}",
+            )
+        else:
+            QMessageBox.warning(
+                self, "Connection Failed",
+                f"Could not connect to {base_url}\n"
+                f"Check your API key and base URL.\n"
+                f"Model: {model}",
+            )
+
     def _save_settings(self):
         """Save all settings."""
         config = self.config_manager.config
 
-        # AI settings
+        # AI provider
+        config["ollama"]["ai_provider"] = self.ai_provider.currentData()
+
+        # Local AI (Ollama) settings
         config["ollama"]["server_url"] = self.ai_url.text().strip()
         config["ollama"]["model"] = self.ai_model.text().strip()
         config["ollama"]["timeout"] = self.ai_timeout.value()
         config["ollama"]["temperature"] = self.ai_temp.value()
         config["ollama"]["max_tokens"] = self.ai_max_tokens.value()
+
+        # Cloud AI settings
+        config["cloud_ai"]["api_key"] = self.cloud_api_key.text().strip()
+        config["cloud_ai"]["base_url"] = self.cloud_base_url.text().strip()
+        config["cloud_ai"]["model"] = self.cloud_model.text().strip()
+        config["cloud_ai"]["timeout"] = self.cloud_timeout.value()
+        config["cloud_ai"]["temperature"] = self.cloud_temp.value()
+        config["cloud_ai"]["max_tokens"] = self.cloud_max_tokens.value()
 
         # Scan settings
         config["scan"]["max_workers"] = self.scan_workers.value()
