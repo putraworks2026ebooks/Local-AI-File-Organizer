@@ -55,7 +55,7 @@ class MainWindow(QMainWindow):
         # Initialize core services
         self.ollama = OllamaClient(
             server_url=self.config_manager.ollama_settings.get("server_url", "http://localhost:11434"),
-            model=self.config_manager.ollama_settings.get("model", "llama3.1"),
+            model=self.config_manager.ollama_settings.get("model", "qwen2.5:3b"),
             timeout=self.config_manager.ollama_settings.get("timeout", 60),
             temperature=self.config_manager.ollama_settings.get("temperature", 0.1),
             max_tokens=self.config_manager.ollama_settings.get("max_tokens", 100),

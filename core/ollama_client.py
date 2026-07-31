@@ -12,7 +12,7 @@ class OllamaClient:
     """Client for communicating with a local Ollama server."""
 
     def __init__(self, server_url: str = "http://localhost:11434",
-                 model: str = "llama3.1", timeout: int = 60,
+                 model: str = "qwen2.5:3b", timeout: int = 60,
                  temperature: float = 0.1, max_tokens: int = 100):
         self.server_url = server_url.rstrip("/")
         self.model = model

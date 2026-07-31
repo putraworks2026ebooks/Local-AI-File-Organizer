@@ -77,7 +77,7 @@ class SettingsView(QWidget):
         self.ai_url = QLineEdit(ai_config.get("server_url", "http://localhost:11434"))
         layout.addRow("Ollama Server URL:", self.ai_url)
 
-        self.ai_model = QLineEdit(ai_config.get("model", "llama3.1"))
+        self.ai_model = QLineEdit(ai_config.get("model", "qwen2.5:3b"))
         layout.addRow("AI Model:", self.ai_model)
 
         test_btn = QPushButton("Test Connection")
