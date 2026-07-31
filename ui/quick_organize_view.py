@@ -196,6 +196,10 @@ class QuickOrganizeWorker(QThread):
             self.progress.emit("Organizing", i + 1, total)
         self.db.conn.commit()
 
+        # Write GPS files
+        if hasattr(self, '_metadata_map') and self._metadata_map:
+            self.organizer._write_gps_files(self._metadata_map)
+
         # Clean up empty folders if enabled
         if self.organizer.move_empty_folders:
             self.status_update.emit("Cleaning up empty folders...")
@@ -345,13 +349,8 @@ class QuickOrganizeView(QWidget):
         self.go_btn = QPushButton("Go -- Scan + Analyze + Organize")
         self.go_btn.setObjectName("primary")
         self.go_btn.setStyleSheet("padding: 14px 28px; font-size: 15px;")
-        self.go_btn.clicked.connect(self._start)
+        self.go_btn.clicked.connect(self._on_go_btn)
         btn_layout.addWidget(self.go_btn)
-
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.setEnabled(False)
-        self.cancel_btn.clicked.connect(self._cancel)
-        btn_layout.addWidget(self.cancel_btn)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
@@ -430,6 +429,13 @@ class QuickOrganizeView(QWidget):
         self.scan_paths.append(path)
         self.folder_list.setText("  |  ".join(self.scan_paths))
 
+    def _on_go_btn(self):
+        """Toggle between Go and Stop."""
+        if self.worker and self.worker.isRunning():
+            self._cancel()
+        else:
+            self._start()
+
     def _start(self):
         if not self.scan_paths:
             QMessageBox.warning(self, "No Folders", "Add at least one folder to organize.")
@@ -451,8 +457,8 @@ class QuickOrganizeView(QWidget):
         self.results_table.setRowCount(0)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self.go_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
+        self.go_btn.setText("⏹️ Stop")
+        self.go_btn.setStyleSheet("padding: 14px 28px; font-size: 15px; background-color: #dc3545; color: white;")
         self.status_label.setText("Starting...")
 
         self.worker = QuickOrganizeWorker(
@@ -494,8 +500,9 @@ class QuickOrganizeView(QWidget):
 
     def _on_finished(self, results):
         self.progress_bar.setVisible(False)
-        self.go_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
+        self.go_btn.setText("Go -- Scan + Analyze + Organize")
+        self.go_btn.setStyleSheet("padding: 14px 28px; font-size: 15px;")
+        self.go_btn.setObjectName("primary")
         scanned = results.get("scanned", 0)
         organized = results.get("organized", 0)
         errors = results.get("errors", 0)

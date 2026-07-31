@@ -215,13 +215,8 @@ class OrganizeView(QWidget):
         self.organize_btn = QPushButton("📁 Organize Files")
         self.organize_btn.setObjectName("primary")
         self.organize_btn.setStyleSheet("padding: 12px 24px; font-size: 14px;")
-        self.organize_btn.clicked.connect(self._organize_files)
+        self.organize_btn.clicked.connect(self._on_organize_btn)
         btn_layout.addWidget(self.organize_btn)
-
-        self.cancel_btn = QPushButton("⏹️ Cancel")
-        self.cancel_btn.setEnabled(False)
-        self.cancel_btn.clicked.connect(self._cancel_organize)
-        btn_layout.addWidget(self.cancel_btn)
 
         self.undo_btn = QPushButton("↩️ Undo Last")
         self.undo_btn.clicked.connect(self._undo_last)
@@ -380,6 +375,13 @@ class OrganizeView(QWidget):
         suffix = f" (showing first {preview_count})" if preview_count < len(items) else ""
         self.status_label.setText(f"Preview: {len(self.file_categories)} files to organize{suffix}")
 
+    def _on_organize_btn(self):
+        """Toggle between Organize and Stop."""
+        if self.organize_worker and self.organize_worker.isRunning():
+            self._cancel_organize()
+        else:
+            self._organize_files()
+
     def _organize_files(self):
         """Execute file organization in a WORKER THREAD — no UI freeze."""
         if not self.file_categories:
@@ -440,6 +442,9 @@ class OrganizeView(QWidget):
     def _cancel_organize(self):
         if self.organize_worker and self.organize_worker.isRunning():
             self.organize_worker.cancel()
+            self.organize_btn.setText("📁 Organize Files")
+            self.organize_btn.setStyleSheet("padding: 12px 24px; font-size: 14px;")
+            self.organize_btn.setObjectName("primary")
             self.status_label.setText("Cancelling...")
             self.organize_worker.wait(5000)
 
@@ -454,8 +459,9 @@ class OrganizeView(QWidget):
     def _on_finished(self, results: list):
         """Handle organize completion."""
         self.progress_bar.setVisible(False)
-        self.organize_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
+        self.organize_btn.setText("📁 Organize Files")
+        self.organize_btn.setStyleSheet("padding: 12px 24px; font-size: 14px;")
+        self.organize_btn.setObjectName("primary")
 
         success_count = sum(1 for r in results if r["success"])
         total = len(results)

@@ -73,9 +73,60 @@ class MetadataExtractor:
                                     "GPSInfo", "ExposureTime", "FNumber", "ISOSpeedRatings",
                                     "FocalLength", "LensModel"):
                             meta[tag] = str(value) if not isinstance(value, (str, int, float)) else value
+
+                    # Parse GPS data into lat/lon
+                    gps_data = self._parse_gps(exif)
+                    if gps_data:
+                        meta["GPSLatitude"] = gps_data[0]
+                        meta["GPSLongitude"] = gps_data[1]
         except Exception:
             pass
         return meta
+
+    @staticmethod
+    def _parse_gps(exif: dict) -> tuple[float, float] | None:
+        """Parse EXIF GPSInfo into (latitude, longitude) decimals."""
+        try:
+            from PIL.ExifTags import Base as ExifBase
+            gps_id = None
+            for tag_id, _ in exif.items():
+                tag = ExifBase(tag_id).name if hasattr(ExifBase, tag_id) else str(tag_id)
+                if tag == "GPSInfo":
+                    gps_id = tag_id
+                    break
+            if gps_id is None:
+                return None
+            gps_raw = exif.get(gps_id)
+            if not gps_raw:
+                return None
+
+            def _convert(value):
+                """Convert EXIF rational to float."""
+                if isinstance(value, tuple) and len(value) == 3:
+                    def _ratio(v):
+                        if isinstance(v, tuple) and len(v) == 2 and v[1] != 0:
+                            return v[0] / v[1]
+                        return float(v) if not isinstance(v, tuple) else 0.0
+                    d, m, s = value
+                    return _ratio(d) + _ratio(m) / 60 + _ratio(s) / 3600
+                if isinstance(value, tuple) and len(value) == 2 and value[1] != 0:
+                    return value[0] / value[1]
+                return float(value)
+
+            from PIL.ExifTags import Base as ExifBase
+            gps_tags = {ExifBase(k).name: v for k, v in gps_raw.items()
+                        if hasattr(ExifBase, k)}
+            lat = _convert(gps_tags.get("GPSLatitude"))
+            lon = _convert(gps_tags.get("GPSLongitude"))
+            lat_ref = gps_tags.get("GPSLatitudeRef", "N")
+            lon_ref = gps_tags.get("GPSLongitudeRef", "E")
+            if lat_ref == "S":
+                lat = -lat
+            if lon_ref == "W":
+                lon = -lon
+            return (lat, lon)
+        except Exception:
+            return None
 
     def _extract_video_metadata(self, filepath: Path) -> dict:
         """Extract video metadata."""

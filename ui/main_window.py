@@ -96,6 +96,13 @@ class MainWindow(QMainWindow):
         ui_config = self.config_manager.ui_settings
         self.resize(ui_config.get("window_width", 1400), ui_config.get("window_height", 900))
 
+        # Center window on screen
+        from PySide6.QtWidgets import QApplication
+        screen = QApplication.primaryScreen().geometry()
+        x = (screen.width() - self.width()) // 2
+        y = (screen.height() - self.height()) // 2
+        self.move(x, y)
+
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
