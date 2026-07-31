@@ -22,6 +22,7 @@ from ui.dashboard import DashboardWidget
 from ui.scan_view import ScanView
 from ui.analyze_view import AnalyzeView
 from ui.organize_view import OrganizeView
+from ui.quick_organize_view import QuickOrganizeView
 from ui.duplicates_view import DuplicatesView
 from ui.settings_view import SettingsView
 from ui.logs_view import LogsView
@@ -112,8 +113,15 @@ class MainWindow(QMainWindow):
         self.settings_view = SettingsView(self.config_manager, self.ollama, self.db)
         self.logs_view = LogsView()
 
+        # Quick Organize tab
+        self.quick_organize_view = QuickOrganizeView(
+            self.config, self.db, self.ollama, self.organizer,
+            self.metadata_extractor, self.content_reader, self.ocr
+        )
+
         # Add tabs
         self.tabs.addTab(self.dashboard, "📊 Dashboard")
+        self.tabs.addTab(self.quick_organize_view, "⚡ Quick Organize")
         self.tabs.addTab(self.scan_view, "🔍 Scan")
         self.tabs.addTab(self.analyze_view, "🤖 Analyze")
         self.tabs.addTab(self.organize_view, "📁 Organize")
@@ -125,6 +133,7 @@ class MainWindow(QMainWindow):
         self.scan_view.scan_complete.connect(self._on_scan_complete)
         self.analyze_view.analysis_complete.connect(self._on_analysis_complete)
         self.scan_view.scan_progress.connect(self._update_progress)
+        self.quick_organize_view.finished_organize.connect(self._on_quick_organize_finished)
 
         layout.addWidget(self.tabs)
         self.setCentralWidget(central)
@@ -281,6 +290,16 @@ class MainWindow(QMainWindow):
         self.file_categories = file_categories
         self.organize_view.set_file_categories(file_categories)
         self.dashboard.update_stats()
+
+    def _on_quick_organize_finished(self, results: dict):
+        """Handle quick organize completion."""
+        scanned = results.get("scanned", 0)
+        organized = results.get("organized", 0)
+        self.file_count_label.setText(f"{organized} files organized")
+        self.dashboard.update_stats()
+        self.status_bar.showMessage(
+            f"Quick organize done: {scanned} scanned, {organized} organized", 5000
+        )
 
     def _update_progress(self, current: int, total: int):
         """Update progress bar."""

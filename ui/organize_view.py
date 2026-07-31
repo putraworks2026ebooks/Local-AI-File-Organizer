@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar,
     QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox, QMessageBox,
-    QCheckBox, QFileDialog, QLineEdit, QComboBox
+    QCheckBox, QFileDialog, QLineEdit, QComboBox, QButtonGroup, QRadioButton
 )
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QColor
@@ -114,15 +114,43 @@ class OrganizeView(QWidget):
 
         # Options
         opts_group = QGroupBox("Organization Options")
-        opts_layout = QHBoxLayout()
+        opts_layout = QVBoxLayout()
 
-        self.photos_by_date = QCheckBox("Organize photos by year/month")
+        # Row 1: checkboxes
+        row1 = QHBoxLayout()
+        self.photos_by_date = QCheckBox("Organize photos by date")
         self.photos_by_date.setChecked(self.config.get("organize", {}).get("photo_organize_by_date", True))
-        opts_layout.addWidget(self.photos_by_date)
+        row1.addWidget(self.photos_by_date)
 
         self.create_folders = QCheckBox("Create category folders")
         self.create_folders.setChecked(self.config.get("organize", {}).get("create_category_folders", True))
-        opts_layout.addWidget(self.create_folders)
+        row1.addWidget(self.create_folders)
+        row1.addStretch()
+        opts_layout.addLayout(row1)
+
+        # Row 2: date structure options
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Date structure:"))
+
+        self.date_struct_combo = QComboBox()
+        self.date_struct_combo.addItem("Year/Month (2024/01)", "year_month")
+        self.date_struct_combo.addItem("Year only (2024)", "year")
+        current_struct = self.config.get("organize", {}).get("date_structure", "year_month")
+        idx = self.date_struct_combo.findData(current_struct)
+        if idx >= 0:
+            self.date_struct_combo.setCurrentIndex(idx)
+        self.date_struct_combo.currentDataChanged = None  # placeholder
+        row2.addWidget(self.date_struct_combo)
+
+        row2.addWidget(QLabel("Date-organize categories:"))
+        self.date_cat_edit = QLineEdit(
+            ", ".join(self.config.get("organize", {}).get("date_organize_categories", ["Pictures"]))
+        )
+        self.date_cat_edit.setPlaceholderText("e.g. Pictures, Videos, Music")
+        self.date_cat_edit.setToolTip("Comma-separated list of categories to organize by date")
+        row2.addWidget(self.date_cat_edit)
+        row2.addStretch()
+        opts_layout.addLayout(row2)
 
         opts_group.setLayout(opts_layout)
         layout.addWidget(opts_group)
@@ -189,6 +217,11 @@ class OrganizeView(QWidget):
         self.output_edit.setText(config.get("organize", {}).get("output_base", ""))
         self.photos_by_date.setChecked(config.get("organize", {}).get("photo_organize_by_date", True))
         self.create_folders.setChecked(config.get("organize", {}).get("create_category_folders", True))
+        struct = config.get("organize", {}).get("date_structure", "year_month")
+        idx = self.date_struct_combo.findData(struct)
+        if idx >= 0:
+            self.date_struct_combo.setCurrentIndex(idx)
+        self.date_cat_edit.setText(", ".join(config.get("organize", {}).get("date_organize_categories", ["Pictures"])))
 
     def _browse_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
@@ -210,6 +243,10 @@ class OrganizeView(QWidget):
         organize_config["output_base"] = output_base
         organize_config["photo_organize_by_date"] = self.photos_by_date.isChecked()
         organize_config["create_category_folders"] = self.create_folders.isChecked()
+        organize_config["date_structure"] = self.date_struct_combo.currentData()
+        organize_config["date_organize_categories"] = [
+            c.strip() for c in self.date_cat_edit.text().split(",") if c.strip()
+        ]
         self.organizer.update_config(self.config)
 
         # Cap preview at 500 rows for performance; show count in status
@@ -255,6 +292,10 @@ class OrganizeView(QWidget):
         organize_config["output_base"] = output_base
         organize_config["photo_organize_by_date"] = self.photos_by_date.isChecked()
         organize_config["create_category_folders"] = self.create_folders.isChecked()
+        organize_config["date_structure"] = self.date_struct_combo.currentData()
+        organize_config["date_organize_categories"] = [
+            c.strip() for c in self.date_cat_edit.text().split(",") if c.strip()
+        ]
         self.organizer.update_config(self.config)
 
         self.progress_bar.setVisible(True)

@@ -36,7 +36,11 @@
     "create_category_folders": true,
     "photo_organize_by_date": true,
     "move_duplicates_to_folder": true,
-    "duplicates_folder": "_Duplicates"
+    "duplicates_folder": "_Duplicates",
+    "date_organize_categories": [
+      "Pictures"
+    ],
+    "date_structure": "year_month"
   },
   "ui": {
     "theme": "dark",

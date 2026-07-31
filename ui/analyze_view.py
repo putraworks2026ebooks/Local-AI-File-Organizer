@@ -281,6 +281,16 @@ class AnalyzeView(QWidget):
         self.ai_mode_toggle.toggled.connect(self._on_mode_toggled)
         status_layout.addWidget(self.ai_mode_toggle)
 
+        status_layout.addWidget(QLabel("│"))
+        # Processing mode: bulk vs 1-by-1
+        self.bulk_mode_check = QCheckBox("Bulk mode")
+        self.bulk_mode_check.setToolTip(
+            "Bulk: process all files at once.\n"
+            "1-by-1: show each file in the table as it is processed."
+        )
+        self.bulk_mode_check.setChecked(True)
+        status_layout.addWidget(self.bulk_mode_check)
+
         status_group.setLayout(status_layout)
         layout.addWidget(status_group)
 

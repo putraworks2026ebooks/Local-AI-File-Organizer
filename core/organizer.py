@@ -24,18 +24,21 @@ class FileOrganizer:
         self.config = config
         self.logger = get_logger()
 
-        self.output_base = config.get("organize", {}).get("output_base", "")
-        self.create_category_folders = config.get("organize", {}).get("create_category_folders", True)
-        self.photo_by_date = config.get("organize", {}).get("photo_organize_by_date", True)
-        self.duplicates_folder = config.get("organize", {}).get("duplicates_folder", "_Duplicates")
+        self._load_organize_config(config)
 
-    def update_config(self, config: dict) -> None:
-        self.config = config
+    def _load_organize_config(self, config: dict) -> None:
         organize = config.get("organize", {})
         self.output_base = organize.get("output_base", "")
         self.create_category_folders = organize.get("create_category_folders", True)
         self.photo_by_date = organize.get("photo_organize_by_date", True)
         self.duplicates_folder = organize.get("duplicates_folder", "_Duplicates")
+        # Date-organize settings for any category
+        self.date_organize_categories = organize.get("date_organize_categories", ["Pictures"])
+        self.date_structure = organize.get("date_structure", "year_month")  # "year_month" or "year"
+
+    def update_config(self, config: dict) -> None:
+        self.config = config
+        self._load_organize_config(config)
 
     def get_category_path(self, category: str, file_path: str = None,
                            metadata: dict = None) -> Path:
@@ -44,12 +47,24 @@ class FileOrganizer:
 
         base = Path(self.output_base) / sanitize_filename(category)
 
-        if self.photo_by_date and category == "Pictures" and file_path:
-            photo_date = get_photo_date(Path(file_path))
-            if photo_date:
-                year = str(photo_date.year)
-                month = f"{photo_date.month:02d}"
-                base = base / year / month
+        # Build effective list of categories to date-organize
+        effective_date_cats = set(self.date_organize_categories)
+        if self.photo_by_date:
+            effective_date_cats.add("Pictures")
+        else:
+            effective_date_cats.discard("Pictures")
+
+        should_date_organize = category in effective_date_cats
+
+        if should_date_organize and file_path:
+            file_date = get_photo_date(Path(file_path))
+            if file_date:
+                year = str(file_date.year)
+                if self.date_structure == "year":
+                    base = base / year
+                else:
+                    month = f"{file_date.month:02d}"
+                    base = base / year / month
 
         return base
 
