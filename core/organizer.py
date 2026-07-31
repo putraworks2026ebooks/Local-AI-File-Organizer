@@ -379,14 +379,85 @@ class FileOrganizer:
             pass
         return ""
 
+    @staticmethod
+    def _locationiq_lookup(lat: float, lon: float, api_key: str,
+                            language: str = "en", timeout: int = 10) -> str:
+        """Free reverse geocoding via LocationIQ (10k req/day free tier)."""
+        import requests as _req
+        if not api_key:
+            return ""
+        try:
+            resp = _req.get(
+                f"https://us1.locationiq.com/v1/reverse",
+                params={
+                    "key": api_key,
+                    "lat": lat,
+                    "lon": lon,
+                    "format": "json",
+                    "accept-language": language,
+                },
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                addr = data.get("address", {})
+                parts = []
+                for key in ("road", "neighbourhood", "suburb", "city",
+                            "town", "state", "country"):
+                    val = addr.get(key, "").strip()
+                    if val and val not in parts:
+                        parts.append(val)
+                return ", ".join(parts[:4]) if parts else ""
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _geonames_lookup(lat: float, lon: float, username: str,
+                          timeout: int = 10) -> str:
+        """Free reverse geocoding via GeoNames (free account, 10k req/day)."""
+        import requests as _req
+        if not username:
+            return ""
+        try:
+            resp = _req.get(
+                "http://api.geonames.org/extendedFindNearbyJSON",
+                params={
+                    "lat": lat,
+                    "lng": lon,
+                    "username": username,
+                },
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                geonames = data.get("geonames", [])
+                if not geonames:
+                    return ""
+                # Build from hierarchy (street → city → state → country)
+                parts = []
+                for entry in geonames:
+                    name = entry.get("name", "").strip()
+                    if name and name not in parts:
+                        parts.append(name)
+                return ", ".join(parts[:4]) if parts else ""
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _openstreetmap_lookup(lat: float, lon: float, timeout: int = 10) -> str:
+        """Free reverse geocoding via OpenStreetMap Nominatim (alias)."""
+        return FileOrganizer._nominatim_lookup(lat, lon, timeout)
+
     def _reverse_geocode(self, lat: float, lon: float,
                           provider: str = None, config: dict = None) -> str:
         """Reverse geocode using the configured provider.
 
         Args:
             lat, lon: GPS coordinates.
-            provider: 'nominatim', 'google', 'bigdatacloud', or 'ai'.
-                      If None, reads from config.
+            provider: 'nominatim', 'google', 'bigdatacloud', 'locationiq',
+                      'geonames', or 'ai'. If None, reads from config.
             config: app config dict. If None, uses self.config.
         """
         cfg = config or self.config
@@ -398,11 +469,23 @@ class FileOrganizer:
         if prov == "google":
             api_key = geo_cfg.get("google_api_key", "")
             if not api_key:
-                self.logger.warning("Geocoding: Google selected but no API key configured")
+                self.logger.warning("Geocoding: Google selected but no API key")
                 return ""
             return self._google_geocode_lookup(lat, lon, api_key, language, timeout)
         elif prov == "bigdatacloud":
             return self._bigdatacloud_lookup(lat, lon, language, timeout)
+        elif prov == "locationiq":
+            api_key = geo_cfg.get("locationiq_key", "")
+            if not api_key:
+                self.logger.warning("Geocoding: LocationIQ selected but no API key")
+                return ""
+            return self._locationiq_lookup(lat, lon, api_key, language, timeout)
+        elif prov == "geonames":
+            username = geo_cfg.get("geonames_user", "")
+            if not username:
+                self.logger.warning("Geocoding: GeoNames selected but no username")
+                return ""
+            return self._geonames_lookup(lat, lon, username, timeout)
         elif prov == "nominatim":
             return self._nominatim_lookup(lat, lon, timeout)
         else:

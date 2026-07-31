@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QFileDialog, QListWidget, QMessageBox, QTableWidget,
     QTableWidgetItem, QHeaderView, QInputDialog, QTextEdit
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread
 
 from utils.config import ConfigManager
 from core.ollama_client import OllamaClient
@@ -172,8 +172,10 @@ class SettingsView(QWidget):
         geo_cfg = config.get("geocoding", {})
         self.geo_provider = QComboBox()
         self.geo_provider.addItem("Nominatim (Free, OpenStreetMap)", "nominatim")
-        self.geo_provider.addItem("Google Maps API (Requires key)", "google")
         self.geo_provider.addItem("BigDataCloud (Free, no key)", "bigdatacloud")
+        self.geo_provider.addItem("LocationIQ (Free, 10k/day, needs key)", "locationiq")
+        self.geo_provider.addItem("GeoNames (Free, needs username)", "geonames")
+        self.geo_provider.addItem("Google Maps API (Requires key)", "google")
         self.geo_provider.addItem("AI / Ollama (Uses your AI model)", "ai")
         # Select current provider
         current_geo = geo_cfg.get("provider", "nominatim")
@@ -187,11 +189,24 @@ class SettingsView(QWidget):
         self.google_api_key.setPlaceholderText("Google Maps Geocoding API key")
         geo_layout.addRow("Google API Key:", self.google_api_key)
 
+        self.locationiq_key = QLineEdit(geo_cfg.get("locationiq_key", ""))
+        self.locationiq_key.setEchoMode(QLineEdit.Password)
+        self.locationiq_key.setPlaceholderText("LocationIQ API key (free at locationiq.com)")
+        geo_layout.addRow("LocationIQ Key:", self.locationiq_key)
+
+        self.geonames_user = QLineEdit(geo_cfg.get("geonames_user", ""))
+        self.geonames_user.setPlaceholderText("GeoNames username (free at geonames.org)")
+        geo_layout.addRow("GeoNames User:", self.geonames_user)
+
         geo_info = QLabel(
-            "Nominatim: Free, no signup, 1 request/sec limit.\n"
-            "Google: Best accuracy, needs API key from Google Cloud Console.\n"
-            "BigDataCloud: Free, fast, good for cities.\n"
-            "AI/Ollama: Uses your local/cloud model for geocoding."
+            "Free providers (no signup needed):\n"
+            "  • Nominatim — OpenStreetMap, 1 req/sec, street-level\n"
+            "  • BigDataCloud — fast, city-level accuracy\n"
+            "Free providers (need free signup):\n"
+            "  • LocationIQ — 10k req/day, street-level\n"
+            "  • GeoNames — 10k req/day, city-level\n"
+            "Paid: Google Maps — best accuracy, needs API key\n"
+            "AI/Ollama — uses your AI model, no extra service needed"
         )
         geo_info.setWordWrap(True)
         geo_info.setStyleSheet("color: gray; font-size: 11px; padding: 4px;")
@@ -201,6 +216,45 @@ class SettingsView(QWidget):
         test_geo_btn = QPushButton("🧪 Test Geocoding")
         test_geo_btn.clicked.connect(self._test_geocoding)
         geo_layout.addRow("", test_geo_btn)
+
+        # ── AI Chat Test Box ──
+        chat_group = QGroupBox("💬 Test AI Chat")
+        chat_layout = QVBoxLayout(chat_group)
+        ai_layout.addWidget(chat_group)
+
+        chat_help = QLabel(
+            "Type a message to test if your AI model is working.\n"
+            "This sends a simple chat request to Ollama and shows the response.\n"
+            "Useful to verify the connection before organizing files."
+        )
+        chat_help.setWordWrap(True)
+        chat_help.setStyleSheet("color: gray; font-size: 11px; padding: 4px;")
+        chat_layout.addWidget(chat_help)
+
+        # Chat history display
+        self.chat_display = QTextEdit()
+        self.chat_display.setReadOnly(True)
+        self.chat_display.setPlaceholderText("AI responses will appear here...")
+        self.chat_display.setStyleSheet(
+            "QTextEdit { background-color: #1a1a1a; color: #e0e0e0; "
+            "font-family: monospace; font-size: 13px; padding: 8px; }"
+        )
+        self.chat_display.setMinimumHeight(150)
+        chat_layout.addWidget(self.chat_display)
+
+        # Chat input row
+        chat_input_row = QHBoxLayout()
+        self.chat_input = QLineEdit()
+        self.chat_input.setPlaceholderText("Type a test message, e.g. 'Hello, what can you do?'")
+        self.chat_input.returnPressed.connect(self._send_chat_test)
+        chat_input_row.addWidget(self.chat_input)
+
+        self.chat_send_btn = QPushButton("Send")
+        self.chat_send_btn.clicked.connect(self._send_chat_test)
+        chat_input_row.addWidget(self.chat_send_btn)
+        chat_layout.addLayout(chat_input_row)
+
+        self._chat_worker = None
 
         self.ai_timeout = QSpinBox()
         self.ai_timeout.setRange(5, 600)
@@ -684,6 +738,65 @@ class SettingsView(QWidget):
             f"Found {len(models)} models ({len(local)} local, {len(cloud)} cloud).\n"
             f"Models: {', '.join(models[:15])}" + ("..." if len(models) > 15 else ""))
 
+    def _send_chat_test(self):
+        """Send a test message to Ollama and show the response."""
+        msg = self.chat_input.text().strip()
+        if not msg:
+            return
+        if not self.ollama or not self.ollama.is_available():
+            self.chat_display.append(
+                f"\n⚠️ Ollama is not running. Start Ollama first.\n"
+                f"   Server: {self.ai_url.text().strip()}"
+            )
+            return
+
+        self.chat_display.append(f"\n🧑 You: {msg}")
+        self.chat_input.clear()
+        self.chat_send_btn.setEnabled(False)
+        self.chat_send_btn.setText("Thinking...")
+
+        # Run in background thread to avoid freezing UI
+        class ChatWorker(QThread):
+            response_ready = Signal(str)
+            error_signal = Signal(str)
+
+            def __init__(self, ollama, message):
+                super().__init__()
+                self.ollama = ollama
+                self.message = message
+
+            def run(self):
+                try:
+                    response = self.ollama.chat(
+                        [{"role": "user", "content": self.message}],
+                        num_predict=200,
+                    )
+                    if response:
+                        self.response_ready.emit(response.strip())
+                    else:
+                        self.error_signal.emit("AI returned empty response")
+                except Exception as e:
+                    self.error_signal.emit(str(e))
+
+        self._chat_worker = ChatWorker(self.ollama, msg)
+        self._chat_worker.response_ready.connect(self._chat_response)
+        self._chat_worker.error_signal.connect(self._chat_error)
+        self._chat_worker.start()
+
+    def _chat_response(self, response):
+        """Handle successful AI response."""
+        self.chat_display.append(f"🤖 AI: {response}")
+        self.chat_send_btn.setEnabled(True)
+        self.chat_send_btn.setText("Send")
+        self._chat_worker = None
+
+    def _chat_error(self, error):
+        """Handle AI chat error."""
+        self.chat_display.append(f"❌ Error: {error}")
+        self.chat_send_btn.setEnabled(True)
+        self.chat_send_btn.setText("Send")
+        self._chat_worker = None
+
     def _test_geocoding(self):
         """Test the selected geocoding provider with a sample coordinate."""
         provider = self.geo_provider.currentData()
@@ -697,6 +810,22 @@ class SettingsView(QWidget):
                     "Enter your Google Maps Geocoding API key first.")
                 return
             result = self.organizer._google_geocode_lookup(test_lat, test_lon, api_key)
+        elif provider == "locationiq":
+            api_key = self.locationiq_key.text().strip()
+            if not api_key:
+                QMessageBox.warning(self, "No API Key",
+                    "Enter your LocationIQ API key first.\n"
+                    "Get a free key at locationiq.com")
+                return
+            result = self.organizer._locationiq_lookup(test_lat, test_lon, api_key)
+        elif provider == "geonames":
+            username = self.geonames_user.text().strip()
+            if not username:
+                QMessageBox.warning(self, "No Username",
+                    "Enter your GeoNames username first.\n"
+                    "Get a free account at geonames.org")
+                return
+            result = self.organizer._geonames_lookup(test_lat, test_lon, username)
         elif provider == "nominatim":
             result = self.organizer._nominatim_lookup(test_lat, test_lon)
         elif provider == "bigdatacloud":

@@ -101,6 +101,8 @@
   "geocoding": {
     "provider": "nominatim",
     "google_api_key": "",
+    "locationiq_key": "",
+    "geonames_user": "",
     "language": "en",
     "timeout": 10
   }
