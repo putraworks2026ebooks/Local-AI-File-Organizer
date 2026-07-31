@@ -139,30 +139,133 @@ class SettingsView(QWidget):
         return tab
 
     def _build_organize_tab(self) -> QWidget:
-        """Build organize settings tab."""
+        """Build organize settings tab — all organize options live here."""
         tab = QWidget()
-        layout = QFormLayout(tab)
+        layout = QVBoxLayout(tab)
         org_config = self.config_manager.organize_settings
 
+        # Output base folder
+        out_group = QGroupBox("Output")
+        out_layout = QFormLayout(out_group)
         self.org_output = QLineEdit(org_config.get("output_base", ""))
-        layout.addRow("Output Base Folder:", self.org_output)
-
+        out_layout.addRow("Output Base Folder:", self.org_output)
         browse_btn = QPushButton("Browse...")
         browse_btn.clicked.connect(lambda: self._browse_folder(self.org_output))
-        layout.addRow("", browse_btn)
+        out_layout.addRow("", browse_btn)
+        layout.addWidget(out_group)
+
+        # General options
+        opts_group = QGroupBox("Options")
+        opts_layout = QVBoxLayout(opts_group)
 
         self.org_photos_date = QCheckBox("Organize photos by year/month")
         self.org_photos_date.setChecked(org_config.get("photo_organize_by_date", True))
-        layout.addRow("", self.org_photos_date)
+        opts_layout.addWidget(self.org_photos_date)
 
         self.org_create_folders = QCheckBox("Create category folders")
         self.org_create_folders.setChecked(org_config.get("create_category_folders", True))
-        layout.addRow("", self.org_create_folders)
+        opts_layout.addWidget(self.org_create_folders)
 
+        self.org_move_empty = QCheckBox("Move empty folders to ToBeDeleted")
+        self.org_move_empty.setChecked(org_config.get("move_empty_folders", True))
+        self.org_move_empty.setToolTip("After organizing, move empty source folders to a ToBeDeleted folder")
+        opts_layout.addWidget(self.org_move_empty)
+
+        # Max file size
+        size_row = QHBoxLayout()
+        size_row.addWidget(QLabel("Max file size to organize (MB):"))
+        self.org_max_size = QSpinBox()
+        self.org_max_size.setRange(0, 999999)
+        self.org_max_size.setValue(org_config.get("max_organize_size_mb", 0))
+        self.org_max_size.setSpecialValueText("No limit")
+        self.org_max_size.setToolTip("0 = no limit. Files larger than this are skipped during organize.")
+        size_row.addWidget(self.org_max_size)
+        size_row.addStretch()
+        opts_layout.addLayout(size_row)
+
+        # Bulk / 1-by-1 mode
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Processing mode:"))
+        self.org_bulk_mode = QCheckBox("Bulk (all at once)")
+        self.org_bulk_mode.setChecked(org_config.get("organize", {}).get("bulk_mode", True))
+        mode_row.addWidget(self.org_bulk_mode)
+        self.org_onebyone_mode = QCheckBox("1-by-1 (step through)")
+        self.org_onebyone_mode.setChecked(not self.org_bulk_mode.isChecked())
+        self.org_bulk_mode.toggled.connect(
+            lambda checked: self.org_onebyone_mode.setChecked(not checked)
+        )
+        self.org_onebyone_mode.toggled.connect(
+            lambda checked: self.org_bulk_mode.setChecked(not checked)
+        )
+        mode_row.addWidget(self.org_onebyone_mode)
+        mode_row.addStretch()
+        opts_layout.addLayout(mode_row)
+
+        layout.addWidget(opts_group)
+
+        # Duplicates folder name
+        dup_row = QHBoxLayout()
+        dup_row.addWidget(QLabel("Duplicates folder name:"))
         self.org_dup_folder = QLineEdit(org_config.get("duplicates_folder", "_Duplicates"))
-        layout.addRow("Duplicates folder name:", self.org_dup_folder)
+        dup_row.addWidget(self.org_dup_folder)
+        dup_row.addStretch()
+        layout.addLayout(dup_row)
 
+        # Date structure per category
+        layout.addWidget(QLabel("Date structure per category:"))
+        self.org_date_struct_table = QTableWidget()
+        self.org_date_struct_table.setColumnCount(2)
+        self.org_date_struct_table.setHorizontalHeaderLabels(["Category", "Date Structure"])
+        self.org_date_struct_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.org_date_struct_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.org_date_struct_table.setMaximumHeight(250)
+        self._populate_org_date_struct_table()
+        layout.addWidget(self.org_date_struct_table)
+
+        layout.addStretch()
         return tab
+
+    def _populate_org_date_struct_table(self):
+        """Populate date structure table in Settings."""
+        import json as _json
+        from pathlib import Path as _Path
+        cat_path = _Path(__file__).parent.parent / "config" / "categories.json"
+        with open(cat_path, "r") as _f:
+            cats = [c["name"] for c in _json.load(_f)["categories"]]
+        try:
+            custom = self.db.get_custom_categories()
+            cats.extend(c["name"] for c in custom if c["name"] not in cats)
+        except Exception:
+            pass
+
+        saved = self.config_manager.config.get("organize", {}).get("date_structures", {})
+        self.org_date_struct_table.setRowCount(len(cats))
+        for i, cat in enumerate(cats):
+            name_item = QTableWidgetItem(cat)
+            name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.org_date_struct_table.setItem(i, 0, name_item)
+
+            combo = QComboBox()
+            combo.addItem("None (flat)", "none")
+            combo.addItem("Year (2024)", "year")
+            combo.addItem("Year/Month (2024/01)", "year_month")
+            current = saved.get(cat, "none")
+            idx = combo.findData(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            self.org_date_struct_table.setCellWidget(i, 1, combo)
+
+    def _get_org_date_structures(self):
+        """Read date structures from the Settings table."""
+        structures = {}
+        for i in range(self.org_date_struct_table.rowCount()):
+            cat_item = self.org_date_struct_table.item(i, 0)
+            combo = self.org_date_struct_table.cellWidget(i, 1)
+            if cat_item and combo:
+                struct = combo.currentData()
+                if struct != "none":
+                    structures[cat_item.text()] = struct
+        return structures
 
     def _build_categories_tab(self) -> QWidget:
         """Build categories management tab."""
@@ -389,6 +492,10 @@ class SettingsView(QWidget):
         config["organize"]["photo_organize_by_date"] = self.org_photos_date.isChecked()
         config["organize"]["create_category_folders"] = self.org_create_folders.isChecked()
         config["organize"]["duplicates_folder"] = self.org_dup_folder.text().strip()
+        config["organize"]["move_empty_folders"] = self.org_move_empty.isChecked()
+        config["organize"]["max_organize_size_mb"] = self.org_max_size.value()
+        config["organize"]["bulk_mode"] = self.org_bulk_mode.isChecked()
+        config["organize"]["date_structures"] = self._get_org_date_structures()
 
         # Advanced settings
         config["ocr"]["enabled"] = self.ocr_enabled.isChecked()

@@ -277,7 +277,7 @@ class AnalyzeView(QWidget):
             "Checked: use Ollama AI for smart classification.\n"
             "Unchecked: use rule-based classification by file extension (no AI needed)."
         )
-        self.ai_mode_toggle.setChecked(self.config.get("analyze", {}).get("use_ai", True))
+        self.ai_mode_toggle.setChecked(self.config.get("analyze", {}).get("use_ai", False))
         self.ai_mode_toggle.toggled.connect(self._on_mode_toggled)
         status_layout.addWidget(self.ai_mode_toggle)
 

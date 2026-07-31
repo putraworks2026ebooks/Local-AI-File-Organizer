@@ -124,73 +124,34 @@ class OrganizeView(QWidget):
         title.setStyleSheet("font-size: 20px; font-weight: bold; padding: 10px;")
         layout.addWidget(title)
 
-        # Output path
-        path_group = QGroupBox("Output Destination")
-        path_layout = QHBoxLayout()
-
-        path_layout.addWidget(QLabel("Base folder:"))
+        # Output info (read from Settings → Organize tab)
+        info_group = QGroupBox("Output (configured in Settings → Organize)")
+        info_layout = QHBoxLayout()
+        info_layout.addWidget(QLabel("Output folder:"))
         self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("Select destination folder...")
-        output_base = self.config.get("organize", {}).get("output_base", "")
-        self.output_edit.setText(output_base)
-        path_layout.addWidget(self.output_edit)
+        self.output_edit.setPlaceholderText("Set in Settings → Organize tab...")
+        self.output_edit.setText(self.config.get("organize", {}).get("output_base", ""))
+        self.output_edit.setReadOnly(True)
+        info_layout.addWidget(self.output_edit)
 
-        browse_btn = QPushButton("📁 Browse")
-        browse_btn.clicked.connect(self._browse_output)
-        path_layout.addWidget(browse_btn)
+        # Show current settings summary
+        org_cfg = self.config.get("organize", {})
+        summary_parts = []
+        if org_cfg.get("photo_organize_by_date", True):
+            summary_parts.append("Photos by date ✓")
+        if org_cfg.get("create_category_folders", True):
+            summary_parts.append("Category folders ✓")
+        if org_cfg.get("move_empty_folders", True):
+            summary_parts.append("Move empty ✓")
+        max_sz = org_cfg.get("max_organize_size_mb", 0)
+        summary_parts.append(f"Max size: {max_sz if max_sz > 0 else 'No limit'}")
+        summary_parts.append("Bulk" if org_cfg.get("bulk_mode", True) else "1-by-1")
+        self.settings_summary = QLabel(" | ".join(summary_parts))
+        self.settings_summary.setStyleSheet("color: #666; font-size: 12px;")
+        info_layout.addWidget(self.settings_summary)
 
-        path_group.setLayout(path_layout)
-        layout.addWidget(path_group)
-
-        # Options
-        opts_group = QGroupBox("Organization Options")
-        opts_layout = QVBoxLayout()
-
-        # Row 1: checkboxes
-        row1 = QHBoxLayout()
-        self.photos_by_date = QCheckBox("Organize photos by date")
-        self.photos_by_date.setChecked(self.config.get("organize", {}).get("photo_organize_by_date", True))
-        row1.addWidget(self.photos_by_date)
-
-        self.create_folders = QCheckBox("Create category folders")
-        self.create_folders.setChecked(self.config.get("organize", {}).get("create_category_folders", True))
-        row1.addWidget(self.create_folders)
-
-        self.move_empty_check = QCheckBox("Move empty folders to ToBeDeleted")
-        self.move_empty_check.setChecked(self.config.get("organize", {}).get("move_empty_folders", True))
-        self.move_empty_check.setToolTip("After organizing, move empty source folders to a ToBeDeleted folder")
-        row1.addWidget(self.move_empty_check)
-
-        row1.addStretch()
-        opts_layout.addLayout(row1)
-
-        # Row 2: max file size for organizing
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Max file size to organize (MB):"))
-        self.max_size_spin = QSpinBox()
-        self.max_size_spin.setRange(0, 999999)
-        self.max_size_spin.setValue(self.config.get("organize", {}).get("max_organize_size_mb", 0))
-        self.max_size_spin.setSpecialValueText("No limit")
-        self.max_size_spin.setToolTip("0 = no limit. Files larger than this are skipped during organize.")
-        row2.addWidget(self.max_size_spin)
-        row2.addStretch()
-        opts_layout.addLayout(row2)
-
-        # Row 3: per-category date structure table
-        row3_label = QLabel("Date structure per category (set once, applies to all):")
-        opts_layout.addWidget(row3_label)
-
-        self.date_struct_table = QTableWidget()
-        self.date_struct_table.setColumnCount(2)
-        self.date_struct_table.setHorizontalHeaderLabels(["Category", "Date Structure"])
-        self.date_struct_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.date_struct_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.date_struct_table.setMaximumHeight(200)
-        self._populate_date_struct_table()
-        opts_layout.addWidget(self.date_struct_table)
-
-        opts_group.setLayout(opts_layout)
-        layout.addWidget(opts_group)
+        info_group.setLayout(info_layout)
+        layout.addWidget(info_group)
 
         # Category filter
         filter_group = QGroupBox("Category Filter")
@@ -417,9 +378,9 @@ class OrganizeView(QWidget):
             QMessageBox.warning(self, "No Files", "No files to organize.")
             return
 
-        output_base = self.output_edit.text().strip()
+        output_base = self.config.get("organize", {}).get("output_base", "")
         if not output_base:
-            QMessageBox.warning(self, "No Output", "Please select an output folder.")
+            QMessageBox.warning(self, "No Output", "Set output folder in Settings → Organize tab first.")
             return
 
         reply = QMessageBox.question(
@@ -431,13 +392,7 @@ class OrganizeView(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        organize_config = self.config.setdefault("organize", {})
-        organize_config["output_base"] = output_base
-        organize_config["photo_organize_by_date"] = self.photos_by_date.isChecked()
-        organize_config["create_category_folders"] = self.create_folders.isChecked()
-        organize_config["move_empty_folders"] = self.move_empty_check.isChecked()
-        organize_config["max_organize_size_mb"] = self.max_size_spin.value()
-        organize_config["date_structures"] = self._get_date_structures_from_table()
+        # Config already set from Settings — just update organizer
         self.organizer.update_config(self.config)
 
         self.progress_bar.setVisible(True)

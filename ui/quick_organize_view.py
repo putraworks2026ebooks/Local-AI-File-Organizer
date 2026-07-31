@@ -286,72 +286,15 @@ class QuickOrganizeView(QWidget):
         output_layout = QHBoxLayout()
         output_layout.addWidget(QLabel("Organize into:"))
         self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("Select destination folder...")
+        self.output_edit.setPlaceholderText("Set in Settings → Organize tab...")
+        self.output_edit.setText(self.config.get("organize", {}).get("output_base", ""))
+        self.output_edit.setReadOnly(True)
         output_layout.addWidget(self.output_edit)
-
-        browse_btn = QPushButton("Browse")
-        browse_btn.clicked.connect(self._browse_output)
-        output_layout.addWidget(browse_btn)
         output_group.setLayout(output_layout)
         layout.addWidget(output_group)
 
-        opts_group = QGroupBox("Options")
-        opts_layout = QVBoxLayout()
-
-        row1 = QHBoxLayout()
-        self.use_ai_check = QCheckBox("Use AI (requires Ollama)")
-        self.use_ai_check.setChecked(False)
-        row1.addWidget(self.use_ai_check)
-
-        self.bulk_radio = QCheckBox("Bulk mode (all at once)")
-        self.bulk_radio.setChecked(True)
-        self.bulk_radio.setToolTip("Process all files in one batch")
-        row1.addWidget(self.bulk_radio)
-
-        self.onebyone_radio = QCheckBox("1-by-1 mode (step through)")
-        self.onebyone_radio.setChecked(False)
-        self.onebyone_radio.setToolTip("Process files one at a time with live preview")
-        row1.addWidget(self.onebyone_radio)
-
-        self.bulk_radio.toggled.connect(
-            lambda checked: self.onebyone_radio.setChecked(not checked) if checked else None
-        )
-        self.onebyone_radio.toggled.connect(
-            lambda checked: self.bulk_radio.setChecked(not checked) if checked else None
-        )
-        row1.addStretch()
-        opts_layout.addLayout(row1)
-
-        # Row 2: max size + empty folders
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Max file size (MB):"))
-        self.max_size_spin = QSpinBox()
-        self.max_size_spin.setRange(0, 999999)
-        self.max_size_spin.setValue(0)
-        self.max_size_spin.setSpecialValueText("No limit")
-        self.max_size_spin.setToolTip("0 = no limit. Files larger than this are skipped.")
-        row2.addWidget(self.max_size_spin)
-
-        self.move_empty_check = QCheckBox("Move empty folders to ToBeDeleted")
-        self.move_empty_check.setChecked(True)
-        self.move_empty_check.setToolTip("After organizing, move empty source folders to ToBeDeleted")
-        row2.addWidget(self.move_empty_check)
-        row2.addStretch()
-        opts_layout.addLayout(row2)
-
-        # Row 3: per-category date structure table
-        opts_layout.addWidget(QLabel("Date structure per category:"))
-        self.date_struct_table = QTableWidget()
-        self.date_struct_table.setColumnCount(2)
-        self.date_struct_table.setHorizontalHeaderLabels(["Category", "Date Structure"])
-        self.date_struct_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.date_struct_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.date_struct_table.setMaximumHeight(200)
-        self._populate_date_struct_table()
-        opts_layout.addWidget(self.date_struct_table)
-
-        opts_group.setLayout(opts_layout)
-        layout.addWidget(opts_group)
+        # Options are now in Settings → Organize tab
+        # Read config values at start time
 
         results_group = QGroupBox("Live Results")
         results_layout = QVBoxLayout()
@@ -462,19 +405,19 @@ class QuickOrganizeView(QWidget):
         if not self.scan_paths:
             QMessageBox.warning(self, "No Folders", "Add at least one folder to organize.")
             return
-        if not self.output_edit.text().strip():
-            QMessageBox.warning(self, "No Output", "Select a destination folder.")
+
+        # Read output from config (set in Settings → Organize tab)
+        organize_config = self.config.setdefault("organize", {})
+        output_base = organize_config.get("output_base", "")
+        if not output_base:
+            QMessageBox.warning(self, "No Output", "Set output folder in Settings → Organize tab first.")
             return
 
-        organize_config = self.config.setdefault("organize", {})
-        organize_config["output_base"] = self.output_edit.text().strip()
-        organize_config["move_empty_folders"] = self.move_empty_check.isChecked()
-        organize_config["max_organize_size_mb"] = self.max_size_spin.value()
-        organize_config["date_structures"] = self._get_date_structures_from_table()
+        # Config is already set from Settings — just update organizer
         self.organizer.update_config(self.config)
 
-        use_ai = self.use_ai_check.isChecked() and self.ollama.is_available()
-        bulk = self.bulk_radio.isChecked()
+        use_ai = self.config.get("analyze", {}).get("use_ai", False) and self.ollama.is_available()
+        bulk = organize_config.get("bulk_mode", True)
 
         self.results_table.setRowCount(0)
         self.progress_bar.setVisible(True)
