@@ -59,6 +59,20 @@ class FileOrganizer:
 
         base = Path(self.output_base) / (sanitize_filename(category) + "-AI")
 
+        # Camera maker/model subfolders (for images with EXIF data)
+        # Path: Pictures-AI/Canon/EOS_R5/2024/01/photo.jpg
+        if metadata and category in ("Pictures", "Videos"):
+            make = metadata.get("Make")
+            model = metadata.get("Model")
+            if make:
+                make_clean = sanitize_filename(str(make).strip())
+                if make_clean:
+                    base = base / make_clean
+            if model:
+                model_clean = sanitize_filename(str(model).strip())
+                if model_clean:
+                    base = base / model_clean
+
         # Per-category date structure
         struct = self.date_structures.get(category, "none")
 
@@ -173,6 +187,9 @@ class FileOrganizer:
         # Final flush
         self.db.conn.commit()
 
+        # Write GPS data to date folders
+        self._write_gps_files(metadata_map)
+
         self.logger.info(f"Organized {success_count}/{total} files successfully")
 
         # Clean up empty folders after organizing
@@ -180,6 +197,79 @@ class FileOrganizer:
             self._cleanup_empty_folders(file_categories)
 
         return results
+
+    def _write_gps_files(self, metadata_map: dict = None):
+        """Write gps.md in each date folder with GPS coordinates and places."""
+        if not metadata_map:
+            return
+
+        # Collect GPS data per folder
+        folder_gps: dict = {}
+        for file_path, meta in metadata_map.items():
+            lat = meta.get("GPSLatitude")
+            lon = meta.get("GPSLongitude")
+            if lat is None or lon is None:
+                continue
+            category = meta.get("category", "Pictures")
+            dest_dir = self.get_category_path(category, file_path, meta)
+            # Only write gps.md in date folders (has year subfolder)
+            if dest_dir.name.isdigit() or dest_dir.parent.name.isdigit():
+                folder_gps.setdefault(str(dest_dir), []).append({
+                    "file": Path(file_path).name,
+                    "lat": round(lat, 6),
+                    "lon": round(lon, 6),
+                })
+
+        from datetime import datetime
+        for folder_str, entries in folder_gps.items():
+            folder = Path(folder_str)
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                gps_file = folder / "gps.md"
+
+                # Load existing entries (merge so re-organize updates)
+                existing = {}
+                if gps_file.exists():
+                    for line in gps_file.read_text(encoding="utf-8").splitlines():
+                        if line.startswith("| ") and "|" in line[2:]:
+                            parts = [p.strip() for p in line.split("|")[1:-1]]
+                            if len(parts) >= 4:
+                                try:
+                                    existing[parts[3]] = {
+                                        "lat": float(parts[1]),
+                                        "lon": float(parts[2]),
+                                        "place": parts[0] if parts[0] != "—" else "",
+                                    }
+                                except (ValueError, IndexError):
+                                    pass
+
+                # Merge new entries
+                for e in entries:
+                    key = e["file"]
+                    if key not in existing:
+                        existing[key] = {
+                            "lat": e["lat"],
+                            "lon": e["lon"],
+                            "place": "",
+                        }
+
+                # Write gps.md
+                lines = ["# GPS Data", ""]
+                lines.append(f"**Folder:** `{folder.name}`")
+                lines.append(f"**Total photos with GPS:** {len(existing)}")
+                lines.append("")
+                lines.append("| Place | Latitude | Longitude | File |")
+                lines.append("|-------|----------|-----------|------|")
+                for fname, data in sorted(existing.items()):
+                    place = data.get("place") or f"{data['lat']:.4f}, {data['lon']:.4f}"
+                    lines.append(f"| {place} | {data['lat']} | {data['lon']} | {fname} |")
+                lines.append("")
+                lines.append(f"---\n*Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
+
+                gps_file.write_text("\n".join(lines), encoding="utf-8")
+                self.logger.info(f"GPS data written: {gps_file} ({len(existing)} entries)")
+            except Exception as e:
+                self.logger.warning(f"Failed to write GPS for {folder}: {e}")
 
     def _cleanup_empty_folders(self, file_categories: dict) -> None:
         """Move empty source folders to ToBeDeleted after organizing."""
