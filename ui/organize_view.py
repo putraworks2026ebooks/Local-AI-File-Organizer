@@ -230,45 +230,6 @@ class OrganizeView(QWidget):
         self.status_label.setText(f"{len(file_categories)} files ready for organization")
         self._generate_preview()
 
-    def _populate_date_struct_table(self):
-        """Populate the per-category date structure table with all categories."""
-        import json
-        from pathlib import Path
-
-        categories_path = Path(__file__).parent.parent / "config" / "categories.json"
-        with open(categories_path, "r") as f:
-            cat_config = json.load(f)
-        all_cats = [c["name"] for c in cat_config["categories"]]
-
-        # Add custom categories from DB if available
-        try:
-            custom = self.db.get_custom_categories()
-            all_cats.extend(c["name"] for c in custom if c["name"] not in all_cats)
-        except Exception:
-            pass
-
-        saved_structures = self.config.get("organize", {}).get("date_structures", {})
-
-        self.date_struct_table.setRowCount(len(all_cats))
-        for i, cat in enumerate(all_cats):
-            # Category name (read-only)
-            name_item = QTableWidgetItem(cat)
-            name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.date_struct_table.setItem(i, 0, name_item)
-
-            # Date structure dropdown
-            combo = QComboBox()
-            combo.addItem("None (flat folder)", "none")
-            combo.addItem("Year (2024)", "year")
-            combo.addItem("Year/Month (2024/01)", "year_month")
-
-            current = saved_structures.get(cat, "none")
-            idx = combo.findData(current)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
-
-            self.date_struct_table.setCellWidget(i, 1, combo)
-
     def _get_date_structures_from_table(self) -> dict:
         """Read the per-category date structures from the table."""
         structures = {}
@@ -332,11 +293,6 @@ class OrganizeView(QWidget):
 
         organize_config = self.config.setdefault("organize", {})
         organize_config["output_base"] = output_base
-        organize_config["photo_organize_by_date"] = self.photos_by_date.isChecked()
-        organize_config["create_category_folders"] = self.create_folders.isChecked()
-        organize_config["move_empty_folders"] = self.move_empty_check.isChecked()
-        organize_config["max_organize_size_mb"] = self.max_size_spin.value()
-        organize_config["date_structures"] = self._get_date_structures_from_table()
         self.organizer.update_config(self.config)
 
         # Cap preview at 500 rows for performance; show count in status

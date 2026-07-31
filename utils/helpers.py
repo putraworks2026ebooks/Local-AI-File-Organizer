@@ -48,6 +48,10 @@ def is_system_folder(path: Path | str, system_folders: list[str]) -> bool:
 
 def sanitize_filename(filename: str) -> str:
     """Remove invalid characters from a filename for Windows."""
+    if not filename:
+        return ""
+    # Strip null bytes that EXIF data often contains
+    filename = filename.replace("\x00", "").strip()
     invalid_chars = '<>:"/\\|?*'
     for char in invalid_chars:
         filename = filename.replace(char, "_")

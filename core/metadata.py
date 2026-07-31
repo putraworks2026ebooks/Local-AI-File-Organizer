@@ -72,6 +72,11 @@ class MetadataExtractor:
                         if tag in ("DateTimeOriginal", "DateTimeDigitized", "Make", "Model",
                                     "GPSInfo", "ExposureTime", "FNumber", "ISOSpeedRatings",
                                     "FocalLength", "LensModel"):
+                            # Clean up EXIF values — strip null bytes and whitespace
+                            if isinstance(value, bytes):
+                                value = value.decode("ascii", errors="ignore").replace("\x00", "").strip()
+                            elif isinstance(value, str):
+                                value = value.replace("\x00", "").strip()
                             meta[tag] = str(value) if not isinstance(value, (str, int, float)) else value
 
                     # Parse GPS data into lat/lon
