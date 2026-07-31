@@ -119,12 +119,47 @@ class SettingsView(QWidget):
         self.ai_url = QLineEdit(ai_config.get("server_url", "http://localhost:11434"))
         local_layout.addRow("Ollama Server URL:", self.ai_url)
 
-        self.ai_model = QLineEdit(ai_config.get("model", "qwen2.5:3b"))
+        self.ai_model = QComboBox()
+        self.ai_model.setEditable(True)
+        self.ai_model.addItem(ai_config.get("model", "qwen2.5:3b"))
+        # Local model presets
+        local_presets = ["qwen2.5:3b", "qwen2.5:7b", "llama3.2:3b", "llama3.2:1b", "gpt-oss:20b"]
+        for m in local_presets:
+            if self.ai_model.findText(m) < 0:
+                self.ai_model.addItem(m)
+        # Ollama cloud model presets (requires `ollama signin`)
+        self.ai_model.insertSeparator(self.ai_model.count())
+        cloud_presets = [
+            "qwen3-coder:480b-cloud",
+            "gpt-oss:120b-cloud",
+            "gpt-oss:20b-cloud",
+            "deepseek-v3.1:671b-cloud",
+            "kimi-k2.5:cloud",
+        ]
+        for m in cloud_presets:
+            self.ai_model.addItem(m)
+        # Set current text to configured model
+        self.ai_model.setEditText(ai_config.get("model", "qwen2.5:3b"))
         local_layout.addRow("AI Model:", self.ai_model)
+
+        # Cloud models info
+        cloud_info = QLabel(
+            "☁️ Cloud models (e.g. gpt-oss:120b-cloud) run on Ollama's cloud.\n"
+            "Run 'ollama signin' in terminal first, then select a :cloud model.\n"
+            "No API key needed — uses your Ollama account."
+        )
+        cloud_info.setWordWrap(True)
+        cloud_info.setStyleSheet("color: gray; font-size: 11px; padding: 4px;")
+        local_layout.addRow("", cloud_info)
 
         test_btn = QPushButton("Test Connection")
         test_btn.clicked.connect(self._test_ollama)
         local_layout.addRow("", test_btn)
+
+        # Refresh models button — pulls model list from server
+        refresh_btn = QPushButton("🔄 Refresh Model List")
+        refresh_btn.clicked.connect(self._refresh_ollama_models)
+        local_layout.addRow("", refresh_btn)
 
         self.ai_timeout = QSpinBox()
         self.ai_timeout.setRange(5, 600)
@@ -574,6 +609,40 @@ class SettingsView(QWidget):
                 "Make sure Ollama is running.",
             )
 
+    def _refresh_ollama_models(self):
+        """Pull model list from the Ollama server and populate the dropdown."""
+        url = self.ai_url.text().strip()
+        self.ollama.update_settings(server_url=url)
+        if not self.ollama.is_available():
+            QMessageBox.warning(self, "Connection Failed",
+                f"Could not connect to Ollama at {url}.\nMake sure Ollama is running.")
+            return
+        models = self.ollama.list_models()
+        if not models:
+            QMessageBox.information(self, "No Models",
+                "Connected, but no models found.\nRun 'ollama pull <model>' to download one.")
+            return
+        current = self.ai_model.currentText()
+        self.ai_model.clear()
+        # Keep cloud presets at the bottom
+        local = [m for m in models if ":cloud" not in m and ":Cloud" not in m]
+        cloud = [m for m in models if ":cloud" in m or ":Cloud" in m]
+        for m in local:
+            self.ai_model.addItem(m)
+        if cloud:
+            self.ai_model.insertSeparator(self.ai_model.count())
+            for m in cloud:
+                self.ai_model.addItem(m)
+        # Try to restore current selection
+        idx = self.ai_model.findText(current)
+        if idx >= 0:
+            self.ai_model.setCurrentIndex(idx)
+        else:
+            self.ai_model.setEditText(current)
+        QMessageBox.information(self, "Models Refreshed",
+            f"Found {len(models)} models ({len(local)} local, {len(cloud)} cloud).\n"
+            f"Models: {', '.join(models[:15])}" + ("..." if len(models) > 15 else ""))
+
     def _test_cloud_ai(self):
         """Test cloud AI connection via the unified client."""
         api_key = self.cloud_api_key.text().strip()
@@ -611,7 +680,7 @@ class SettingsView(QWidget):
 
         # Local AI (Ollama) settings
         config["ollama"]["server_url"] = self.ai_url.text().strip()
-        config["ollama"]["model"] = self.ai_model.text().strip()
+        config["ollama"]["model"] = self.ai_model.currentText().strip()
         config["ollama"]["timeout"] = self.ai_timeout.value()
         config["ollama"]["temperature"] = self.ai_temp.value()
         config["ollama"]["max_tokens"] = self.ai_max_tokens.value()
