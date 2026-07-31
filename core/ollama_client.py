@@ -125,7 +125,11 @@ class OllamaClient:
                 return False
 
     def list_models(self) -> list[str]:
-        """List available models on the active backend."""
+        """List available models on the active backend.
+        For local Ollama, /api/tags returns both local and cloud models
+        (cloud models appear with no size). Falls back to /api/ps for
+        currently running models.
+        """
         if self.is_cloud:
             if not self.cloud_api_key:
                 return []
@@ -143,14 +147,25 @@ class OllamaClient:
                 pass
             return []
         else:
+            models = []
             try:
                 resp = requests.get(f"{self.server_url}/api/tags", timeout=10)
                 if resp.status_code == 200:
                     data = resp.json()
-                    return [m["name"] for m in data.get("models", [])]
+                    # Include all models — local ones have a size, cloud ones don't
+                    models = [m["name"] for m in data.get("models", []) if m.get("name")]
             except requests.RequestException:
                 pass
-            return []
+            # If nothing from /api/tags, also try /api/ps (running models)
+            if not models:
+                try:
+                    resp = requests.get(f"{self.server_url}/api/ps", timeout=5)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        models = [m["name"] for m in data.get("models", []) if m.get("name")]
+                except requests.RequestException:
+                    pass
+            return models
 
     # ── inference ───────────────────────────────────────────────────
 
@@ -236,8 +251,14 @@ class OllamaClient:
                 return content
             else:
                 self.logger.warning(
-                    f"Ollama HTTP {resp.status_code}: {resp.text[:300]}"
+                    f"Ollama HTTP {resp.status_code}: {resp.text[:500]}"
                 )
+                # If 401/403, model likely requires ollama signin
+                if resp.status_code in (401, 403):
+                    self.logger.warning(
+                        "Ollama returned auth error — if using a cloud model, "
+                        "run 'ollama signin' in terminal first."
+                    )
         except requests.RequestException as e:
             raise ConnectionError(f"Ollama chat request failed: {e}")
         return None
