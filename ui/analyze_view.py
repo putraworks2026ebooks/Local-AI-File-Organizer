@@ -417,6 +417,23 @@ class AnalyzeView(QWidget):
             if model and model != "No models available":
                 self.ollama.update_settings(model=model)
 
+        # 1-by-1 mode: only analyze files not yet categorized
+        bulk_mode = self.bulk_mode_check.isChecked()
+        if not bulk_mode:
+            unanalyzed = []
+            for f in self.files:
+                cat = f.get("category", "")
+                if not cat or cat == "Uncategorized" or cat == "Miscellaneous":
+                    unanalyzed.append(f)
+            if not unanalyzed:
+                self.status_label.setText("All files already analyzed. Toggle Bulk mode to re-analyze all.")
+                return
+            self.files_to_analyze = unanalyzed
+            self.status_label.setText(f"1-by-1 mode: analyzing {len(unanalyzed)}/{len(self.files)} unanalyzed files...")
+        else:
+            self.files_to_analyze = self.files
+            self.status_label.setText(f"Bulk mode: analyzing all {len(self.files)} files...")
+
         # Get categories from config
         categories_path = Path(__file__).parent.parent / "config" / "categories.json"
         with open(categories_path, "r") as f:
@@ -433,10 +450,10 @@ class AnalyzeView(QWidget):
         self.cancel_btn.setEnabled(True)
 
         method_label = "AI" if use_ai else "rule-based"
-        self.status_label.setText(f"Analyzing {len(self.files)} files ({method_label})...")
+        self.status_label.setText(f"Analyzing {len(self.files_to_analyze)} files ({method_label})...")
 
         self.analyze_worker = AnalyzeWorker(
-            self.files, categories, self.ollama,
+            self.files_to_analyze, categories, self.ollama,
             self.metadata_extractor, self.content_reader, self.ocr,
             self.db, use_ai=use_ai
         )

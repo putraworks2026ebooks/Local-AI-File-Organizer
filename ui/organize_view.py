@@ -29,11 +29,12 @@ class OrganizeWorker(QThread):
     finished_organize = Signal(list)  # results list
 
     def __init__(self, file_categories: dict[str, str], organizer: FileOrganizer,
-                 metadata_map: dict = None):
+                 metadata_map: dict = None, config: dict = None):
         super().__init__()
         self.file_categories = file_categories
         self.organizer = organizer
         self.metadata_map = metadata_map or {}
+        self.config = config or {}
         self._cancel = False
 
     def cancel(self):
@@ -45,12 +46,31 @@ class OrganizeWorker(QThread):
         processed = 0
         success_count = 0
 
+        # Extract metadata in the worker thread (not UI thread)
+        if not self.metadata_map:
+            self.status_update.emit("Extracting metadata...")
+            try:
+                from core.metadata import MetadataExtractor
+                meta_ext = MetadataExtractor(self.config)
+                for file_path in self.file_categories:
+                    if self._cancel:
+                        break
+                    try:
+                        self.metadata_map[file_path] = meta_ext.extract(Path(file_path))
+                    except Exception:
+                        self.metadata_map[file_path] = {}
+            except Exception:
+                pass
+
+        self.status_update.emit(f"Organizing {total} files...")
+
         for file_path, category in self.file_categories.items():
             if self._cancel:
                 break
 
             processed += 1
             metadata = self.metadata_map.get(file_path, {})
+            metadata["category"] = category
             success, message, op_id = self.organizer.move_file(file_path, category, metadata)
 
             results.append({
@@ -68,6 +88,15 @@ class OrganizeWorker(QThread):
 
             if processed % 100 == 0:
                 self.status_update.emit(f"Organizing: {processed}/{total} ({success_count} moved)")
+
+        # Write GPS files after organizing
+        if not self._cancel and self.metadata_map:
+            self.status_update.emit("Writing GPS data...")
+            try:
+                self.organizer._write_gps_files(self.metadata_map)
+            except Exception as e:
+                self.logger = get_logger() if False else None
+                pass
 
         self.status_update.emit(f"Done: {success_count}/{total} files moved")
         self.finished_organize.emit(results)
@@ -414,26 +443,14 @@ class OrganizeView(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setMaximum(len(self.file_categories))
         self.progress_bar.setValue(0)
-        self.organize_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
-        self.status_label.setText("Extracting metadata...")
+        self.organize_btn.setText("⏹️ Stop")
+        self.organize_btn.setStyleSheet("padding: 12px 24px; font-size: 14px; background-color: #dc3545; color: white;")
+        self.status_label.setText("Starting...")
 
-        # Extract metadata for camera maker/model folders
-        metadata_map = {}
-        try:
-            from core.metadata import MetadataExtractor
-            meta_ext = MetadataExtractor(self.config)
-            for file_path in self.file_categories:
-                try:
-                    metadata_map[file_path] = meta_ext.extract(Path(file_path))
-                except Exception:
-                    metadata_map[file_path] = {}
-        except Exception:
-            pass
-
-        self.status_label.setText("Organizing...")
-
-        self.organize_worker = OrganizeWorker(self.file_categories, self.organizer, metadata_map)
+        self.organize_worker = OrganizeWorker(
+            self.file_categories, self.organizer,
+            config=self.config
+        )
         self.organize_worker.progress.connect(self._on_progress)
         self.organize_worker.status_update.connect(self._on_status)
         self.organize_worker.finished_organize.connect(self._on_finished)
