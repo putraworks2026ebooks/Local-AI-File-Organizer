@@ -164,6 +164,44 @@ class SettingsView(QWidget):
         refresh_btn.clicked.connect(self._refresh_ollama_models)
         local_layout.addRow("", refresh_btn)
 
+        # ── Geocoding Settings ──
+        geo_group = QGroupBox("📍 GPS Geocoding Provider")
+        geo_layout = QFormLayout(geo_group)
+        ai_layout.addWidget(geo_group)
+
+        geo_cfg = config.get("geocoding", {})
+        self.geo_provider = QComboBox()
+        self.geo_provider.addItem("Nominatim (Free, OpenStreetMap)", "nominatim")
+        self.geo_provider.addItem("Google Maps API (Requires key)", "google")
+        self.geo_provider.addItem("BigDataCloud (Free, no key)", "bigdatacloud")
+        self.geo_provider.addItem("AI / Ollama (Uses your AI model)", "ai")
+        # Select current provider
+        current_geo = geo_cfg.get("provider", "nominatim")
+        idx = self.geo_provider.findData(current_geo)
+        if idx >= 0:
+            self.geo_provider.setCurrentIndex(idx)
+        geo_layout.addRow("Provider:", self.geo_provider)
+
+        self.google_api_key = QLineEdit(geo_cfg.get("google_api_key", ""))
+        self.google_api_key.setEchoMode(QLineEdit.Password)
+        self.google_api_key.setPlaceholderText("Google Maps Geocoding API key")
+        geo_layout.addRow("Google API Key:", self.google_api_key)
+
+        geo_info = QLabel(
+            "Nominatim: Free, no signup, 1 request/sec limit.\n"
+            "Google: Best accuracy, needs API key from Google Cloud Console.\n"
+            "BigDataCloud: Free, fast, good for cities.\n"
+            "AI/Ollama: Uses your local/cloud model for geocoding."
+        )
+        geo_info.setWordWrap(True)
+        geo_info.setStyleSheet("color: gray; font-size: 11px; padding: 4px;")
+        geo_layout.addRow("", geo_info)
+
+        # Test geocoding button
+        test_geo_btn = QPushButton("🧪 Test Geocoding")
+        test_geo_btn.clicked.connect(self._test_geocoding)
+        geo_layout.addRow("", test_geo_btn)
+
         self.ai_timeout = QSpinBox()
         self.ai_timeout.setRange(5, 600)
         self.ai_timeout.setValue(ai_config.get("timeout", 60))
@@ -645,6 +683,40 @@ class SettingsView(QWidget):
         QMessageBox.information(self, "Models Refreshed",
             f"Found {len(models)} models ({len(local)} local, {len(cloud)} cloud).\n"
             f"Models: {', '.join(models[:15])}" + ("..." if len(models) > 15 else ""))
+
+    def _test_geocoding(self):
+        """Test the selected geocoding provider with a sample coordinate."""
+        provider = self.geo_provider.currentData()
+        # Singapore Marina Bay Sands: 1.2834, 103.8607
+        test_lat, test_lon = 1.2834, 103.8607
+
+        if provider == "google":
+            api_key = self.google_api_key.text().strip()
+            if not api_key:
+                QMessageBox.warning(self, "No API Key",
+                    "Enter your Google Maps Geocoding API key first.")
+                return
+            result = self.organizer._google_geocode_lookup(test_lat, test_lon, api_key)
+        elif provider == "nominatim":
+            result = self.organizer._nominatim_lookup(test_lat, test_lon)
+        elif provider == "bigdatacloud":
+            result = self.organizer._bigdatacloud_lookup(test_lat, test_lon)
+        else:
+            # AI — just note it needs Ollama running
+            QMessageBox.information(self, "AI Geocoding",
+                "AI geocoding uses your Ollama model during the GPS update.\n"
+                "Test it from the Quick Organize tab with real photos.")
+            return
+
+        if result:
+            QMessageBox.information(self, "Geocoding Test OK",
+                f"Provider: {provider}\n"
+                f"Coordinates: {test_lat}, {test_lon}\n"
+                f"Result: {result}")
+        else:
+            QMessageBox.warning(self, "Geocoding Test Failed",
+                f"Provider: {provider} returned no result.\n"
+                f"Check your API key or try another provider.")
 
     def _test_cloud_ai(self):
         """Test cloud AI connection via the unified client."""

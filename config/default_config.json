@@ -97,5 +97,11 @@
     "timeout": 60,
     "temperature": 0.1,
     "max_tokens": 500
+  },
+  "geocoding": {
+    "provider": "nominatim",
+    "google_api_key": "",
+    "language": "en",
+    "timeout": 10
   }
 }

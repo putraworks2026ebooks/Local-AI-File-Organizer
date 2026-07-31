@@ -288,7 +288,7 @@ class FileOrganizer:
                 self.logger.warning(f"Failed to write GPS for {folder}: {e}")
 
     @staticmethod
-    def _nominatim_lookup(lat: float, lon: float) -> str:
+    def _nominatim_lookup(lat: float, lon: float, timeout: int = 10) -> str:
         """Free reverse geocoding via OpenStreetMap Nominatim — no API key needed."""
         import requests as _req
         try:
@@ -296,7 +296,7 @@ class FileOrganizer:
                 "https://nominatim.openstreetmap.org/reverse",
                 params={"lat": lat, "lon": lon, "format": "json", "zoom": 14},
                 headers={"User-Agent": "LocalAIFileOrganizer/1.0"},
-                timeout=10,
+                timeout=timeout,
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -311,19 +311,117 @@ class FileOrganizer:
             pass
         return ""
 
+    @staticmethod
+    def _google_geocode_lookup(lat: float, lon: float, api_key: str,
+                                language: str = "en", timeout: int = 10) -> str:
+        """Reverse geocoding via Google Maps Geocoding API — requires API key."""
+        import requests as _req
+        if not api_key:
+            return ""
+        try:
+            resp = _req.get(
+                "https://maps.googleapis.com/maps/api/geocode/json",
+                params={
+                    "latlng": f"{lat},{lon}",
+                    "key": api_key,
+                    "language": language,
+                    "result_type": "street_address|route|neighborhood|locality|administrative_area_level_1|administrative_area_level_2|country",
+                },
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                results = data.get("results", [])
+                if not results:
+                    return ""
+                # Build from address components (most specific to least)
+                addr = {}
+                for comp in results[0].get("address_components", []):
+                    for t in comp.get("types", []):
+                        if t not in addr:
+                            addr[t] = comp.get("long_name", "")
+                parts = []
+                for key in ("route", "neighborhood", "locality",
+                            "administrative_area_level_1", "country"):
+                    val = addr.get(key, "").strip()
+                    if val and val not in parts:
+                        parts.append(val)
+                return ", ".join(parts[:4]) if parts else ""
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _bigdatacloud_lookup(lat: float, lon: float, language: str = "en",
+                              timeout: int = 10) -> str:
+        """Free reverse geocoding via BigDataCloud — no API key needed."""
+        import requests as _req
+        try:
+            resp = _req.get(
+                "https://api.bigdatacloud.net/data/reverse-geocode-client",
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "localityLanguage": language,
+                },
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                parts = []
+                for key in ("locality", "city", "principalSubdivision",
+                            "countryName"):
+                    val = str(data.get(key, "")).strip()
+                    if val and val != "None" and val not in parts:
+                        parts.append(val)
+                return ", ".join(parts[:4]) if parts else ""
+        except Exception:
+            pass
+        return ""
+
+    def _reverse_geocode(self, lat: float, lon: float,
+                          provider: str = None, config: dict = None) -> str:
+        """Reverse geocode using the configured provider.
+
+        Args:
+            lat, lon: GPS coordinates.
+            provider: 'nominatim', 'google', 'bigdatacloud', or 'ai'.
+                      If None, reads from config.
+            config: app config dict. If None, uses self.config.
+        """
+        cfg = config or self.config
+        geo_cfg = cfg.get("geocoding", {})
+        prov = provider or geo_cfg.get("provider", "nominatim")
+        timeout = geo_cfg.get("timeout", 10)
+        language = geo_cfg.get("language", "en")
+
+        if prov == "google":
+            api_key = geo_cfg.get("google_api_key", "")
+            if not api_key:
+                self.logger.warning("Geocoding: Google selected but no API key configured")
+                return ""
+            return self._google_geocode_lookup(lat, lon, api_key, language, timeout)
+        elif prov == "bigdatacloud":
+            return self._bigdatacloud_lookup(lat, lon, language, timeout)
+        elif prov == "nominatim":
+            return self._nominatim_lookup(lat, lon, timeout)
+        else:
+            return ""  # 'ai' handled by caller via Ollama
+
     def update_gps_with_ai(self, metadata_map: dict, ollama,
                              progress_callback: callable = None) -> int:
-        """Update gps.md files with AI-generated place names.
+        """Update gps.md files with place names.
+
+        Uses the configured geocoding provider (Nominatim, Google, BigDataCloud,
+        or AI/Ollama) to reverse-geocode GPS coordinates.
 
         Reads gps.md files directly, extracts coordinates from table rows,
-        and asks Ollama to identify country, state, city, and road for each
-        entry that doesn't already have a place name.
-
-        Does NOT depend on metadata_map — works purely from gps.md contents.
+        and looks up country, state, city, and road for each entry that
+        doesn't already have a place name.
 
         Args:
             metadata_map: kept for API compatibility (unused — reads gps.md directly).
-            ollama: OllamaClient instance for AI lookups.
+            ollama: OllamaClient instance for AI lookups (only used if provider='ai').
             progress_callback: optional callback(filename, place_name).
 
         Returns:
