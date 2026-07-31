@@ -40,7 +40,15 @@
     "date_organize_categories": [
       "Pictures"
     ],
-    "date_structure": "year_month"
+    "date_structure": "year_month",
+    "max_organize_size_mb": 0,
+    "move_empty_folders": true,
+    "empty_folder_dest": "ToBeDeleted",
+    "date_structures": {
+      "Pictures": "year_month",
+      "Videos": "year",
+      "Music": "year"
+    }
   },
   "ui": {
     "theme": "dark",

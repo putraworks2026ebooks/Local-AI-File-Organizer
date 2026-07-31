@@ -8,7 +8,8 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar,
     QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox, QMessageBox,
-    QCheckBox, QFileDialog, QLineEdit, QComboBox, QButtonGroup, QRadioButton
+    QCheckBox, QFileDialog, QLineEdit, QComboBox, QButtonGroup, QRadioButton,
+    QTableWidget, QTableWidgetItem, QHeaderView, QSpinBox
 )
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QColor
@@ -125,32 +126,39 @@ class OrganizeView(QWidget):
         self.create_folders = QCheckBox("Create category folders")
         self.create_folders.setChecked(self.config.get("organize", {}).get("create_category_folders", True))
         row1.addWidget(self.create_folders)
+
+        self.move_empty_check = QCheckBox("Move empty folders to ToBeDeleted")
+        self.move_empty_check.setChecked(self.config.get("organize", {}).get("move_empty_folders", True))
+        self.move_empty_check.setToolTip("After organizing, move empty source folders to a ToBeDeleted folder")
+        row1.addWidget(self.move_empty_check)
+
         row1.addStretch()
         opts_layout.addLayout(row1)
 
-        # Row 2: date structure options
+        # Row 2: max file size for organizing
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Date structure:"))
-
-        self.date_struct_combo = QComboBox()
-        self.date_struct_combo.addItem("Year/Month (2024/01)", "year_month")
-        self.date_struct_combo.addItem("Year only (2024)", "year")
-        current_struct = self.config.get("organize", {}).get("date_structure", "year_month")
-        idx = self.date_struct_combo.findData(current_struct)
-        if idx >= 0:
-            self.date_struct_combo.setCurrentIndex(idx)
-        self.date_struct_combo.currentDataChanged = None  # placeholder
-        row2.addWidget(self.date_struct_combo)
-
-        row2.addWidget(QLabel("Date-organize categories:"))
-        self.date_cat_edit = QLineEdit(
-            ", ".join(self.config.get("organize", {}).get("date_organize_categories", ["Pictures"]))
-        )
-        self.date_cat_edit.setPlaceholderText("e.g. Pictures, Videos, Music")
-        self.date_cat_edit.setToolTip("Comma-separated list of categories to organize by date")
-        row2.addWidget(self.date_cat_edit)
+        row2.addWidget(QLabel("Max file size to organize (MB):"))
+        self.max_size_spin = QSpinBox()
+        self.max_size_spin.setRange(0, 999999)
+        self.max_size_spin.setValue(self.config.get("organize", {}).get("max_organize_size_mb", 0))
+        self.max_size_spin.setSpecialValueText("No limit")
+        self.max_size_spin.setToolTip("0 = no limit. Files larger than this are skipped during organize.")
+        row2.addWidget(self.max_size_spin)
         row2.addStretch()
         opts_layout.addLayout(row2)
+
+        # Row 3: per-category date structure table
+        row3_label = QLabel("Date structure per category (set once, applies to all):")
+        opts_layout.addWidget(row3_label)
+
+        self.date_struct_table = QTableWidget()
+        self.date_struct_table.setColumnCount(2)
+        self.date_struct_table.setHorizontalHeaderLabels(["Category", "Date Structure"])
+        self.date_struct_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.date_struct_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.date_struct_table.setMaximumHeight(200)
+        self._populate_date_struct_table()
+        opts_layout.addWidget(self.date_struct_table)
 
         opts_group.setLayout(opts_layout)
         layout.addWidget(opts_group)
@@ -211,17 +219,67 @@ class OrganizeView(QWidget):
         self.status_label.setText(f"{len(file_categories)} files ready for organization")
         self._generate_preview()
 
+    def _populate_date_struct_table(self):
+        """Populate the per-category date structure table with all categories."""
+        import json
+        from pathlib import Path
+
+        categories_path = Path(__file__).parent.parent / "config" / "categories.json"
+        with open(categories_path, "r") as f:
+            cat_config = json.load(f)
+        all_cats = [c["name"] for c in cat_config["categories"]]
+
+        # Add custom categories from DB if available
+        try:
+            custom = self.db.get_custom_categories()
+            all_cats.extend(c["name"] for c in custom if c["name"] not in all_cats)
+        except Exception:
+            pass
+
+        saved_structures = self.config.get("organize", {}).get("date_structures", {})
+
+        self.date_struct_table.setRowCount(len(all_cats))
+        for i, cat in enumerate(all_cats):
+            # Category name (read-only)
+            name_item = QTableWidgetItem(cat)
+            name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.date_struct_table.setItem(i, 0, name_item)
+
+            # Date structure dropdown
+            combo = QComboBox()
+            combo.addItem("None (flat folder)", "none")
+            combo.addItem("Year (2024)", "year")
+            combo.addItem("Year/Month (2024/01)", "year_month")
+
+            current = saved_structures.get(cat, "none")
+            idx = combo.findData(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+
+            self.date_struct_table.setCellWidget(i, 1, combo)
+
+    def _get_date_structures_from_table(self) -> dict:
+        """Read the per-category date structures from the table."""
+        structures = {}
+        for i in range(self.date_struct_table.rowCount()):
+            cat_item = self.date_struct_table.item(i, 0)
+            combo = self.date_struct_table.cellWidget(i, 1)
+            if cat_item and combo:
+                cat = cat_item.text()
+                struct = combo.currentData()
+                if struct != "none":
+                    structures[cat] = struct
+        return structures
+
     def set_config(self, config: dict):
         self.config = config
         self.organizer.update_config(config)
         self.output_edit.setText(config.get("organize", {}).get("output_base", ""))
         self.photos_by_date.setChecked(config.get("organize", {}).get("photo_organize_by_date", True))
         self.create_folders.setChecked(config.get("organize", {}).get("create_category_folders", True))
-        struct = config.get("organize", {}).get("date_structure", "year_month")
-        idx = self.date_struct_combo.findData(struct)
-        if idx >= 0:
-            self.date_struct_combo.setCurrentIndex(idx)
-        self.date_cat_edit.setText(", ".join(config.get("organize", {}).get("date_organize_categories", ["Pictures"])))
+        self.move_empty_check.setChecked(config.get("organize", {}).get("move_empty_folders", True))
+        self.max_size_spin.setValue(config.get("organize", {}).get("max_organize_size_mb", 0))
+        self._populate_date_struct_table()
 
     def _browse_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
@@ -243,10 +301,9 @@ class OrganizeView(QWidget):
         organize_config["output_base"] = output_base
         organize_config["photo_organize_by_date"] = self.photos_by_date.isChecked()
         organize_config["create_category_folders"] = self.create_folders.isChecked()
-        organize_config["date_structure"] = self.date_struct_combo.currentData()
-        organize_config["date_organize_categories"] = [
-            c.strip() for c in self.date_cat_edit.text().split(",") if c.strip()
-        ]
+        organize_config["move_empty_folders"] = self.move_empty_check.isChecked()
+        organize_config["max_organize_size_mb"] = self.max_size_spin.value()
+        organize_config["date_structures"] = self._get_date_structures_from_table()
         self.organizer.update_config(self.config)
 
         # Cap preview at 500 rows for performance; show count in status
@@ -292,10 +349,9 @@ class OrganizeView(QWidget):
         organize_config["output_base"] = output_base
         organize_config["photo_organize_by_date"] = self.photos_by_date.isChecked()
         organize_config["create_category_folders"] = self.create_folders.isChecked()
-        organize_config["date_structure"] = self.date_struct_combo.currentData()
-        organize_config["date_organize_categories"] = [
-            c.strip() for c in self.date_cat_edit.text().split(",") if c.strip()
-        ]
+        organize_config["move_empty_folders"] = self.move_empty_check.isChecked()
+        organize_config["max_organize_size_mb"] = self.max_size_spin.value()
+        organize_config["date_structures"] = self._get_date_structures_from_table()
         self.organizer.update_config(self.config)
 
         self.progress_bar.setVisible(True)

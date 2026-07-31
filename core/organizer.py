@@ -32,9 +32,21 @@ class FileOrganizer:
         self.create_category_folders = organize.get("create_category_folders", True)
         self.photo_by_date = organize.get("photo_organize_by_date", True)
         self.duplicates_folder = organize.get("duplicates_folder", "_Duplicates")
-        # Date-organize settings for any category
-        self.date_organize_categories = organize.get("date_organize_categories", ["Pictures"])
-        self.date_structure = organize.get("date_structure", "year_month")  # "year_month" or "year"
+        # Max file size for organizing (skip super big files), 0 = no limit
+        self.max_organize_size_mb = organize.get("max_organize_size_mb", 0)
+        # Empty folder cleanup after organize
+        self.move_empty_folders = organize.get("move_empty_folders", True)
+        self.empty_folder_dest = organize.get("empty_folder_dest", "ToBeDeleted")
+        # Per-category date structure: {category: "none"|"year"|"year_month"}
+        self.date_structures = organize.get("date_structures", {})
+        # Legacy fallback for old single-setting config
+        if not self.date_structures:
+            old_cats = organize.get("date_organize_categories", [])
+            old_struct = organize.get("date_structure", "year_month")
+            for cat in old_cats:
+                self.date_structures[cat] = old_struct
+            if self.photo_by_date:
+                self.date_structures["Pictures"] = self.date_structures.get("Pictures", "year_month")
 
     def update_config(self, config: dict) -> None:
         self.config = config
@@ -47,22 +59,16 @@ class FileOrganizer:
 
         base = Path(self.output_base) / sanitize_filename(category)
 
-        # Build effective list of categories to date-organize
-        effective_date_cats = set(self.date_organize_categories)
-        if self.photo_by_date:
-            effective_date_cats.add("Pictures")
-        else:
-            effective_date_cats.discard("Pictures")
+        # Per-category date structure
+        struct = self.date_structures.get(category, "none")
 
-        should_date_organize = category in effective_date_cats
-
-        if should_date_organize and file_path:
+        if struct != "none" and file_path:
             file_date = get_photo_date(Path(file_path))
             if file_date:
                 year = str(file_date.year)
-                if self.date_structure == "year":
+                if struct == "year":
                     base = base / year
-                else:
+                elif struct == "year_month":
                     month = f"{file_date.month:02d}"
                     base = base / year / month
 
@@ -83,6 +89,11 @@ class FileOrganizer:
             file_size = src.stat().st_size
         except (OSError, PermissionError):
             file_size = 0
+
+        # Skip super big files if max_organize_size is set
+        if self.max_organize_size_mb > 0 and file_size > self.max_organize_size_mb * 1024 * 1024:
+            self.logger.info(f"Skipping large file ({file_size/1024/1024:.0f}MB): {src_path}")
+            return False, f"Skipped: file too large ({file_size/1024/1024:.0f}MB)", None
 
         dest_dir = self.get_category_path(category, src_path, metadata)
         filename = src.name
@@ -162,7 +173,112 @@ class FileOrganizer:
         self.db.conn.commit()
 
         self.logger.info(f"Organized {success_count}/{total} files successfully")
+
+        # Clean up empty folders after organizing
+        if self.move_empty_folders:
+            self._cleanup_empty_folders(file_categories)
+
         return results
+
+    def _cleanup_empty_folders(self, file_categories: dict) -> None:
+        """Move empty source folders to ToBeDeleted after organizing."""
+        import shutil
+        try:
+            # Collect all parent directories of organized files
+            source_dirs = set()
+            for file_path in file_categories:
+                source_dirs.add(Path(file_path).parent)
+
+            # Walk up from each parent and find empty directories
+            # Sort by depth (deepest first) so we don't miss nested empties
+            dirs_to_check = set()
+            for d in source_dirs:
+                # Add the dir itself and all its ancestors up to a reasonable point
+                # But only check dirs that are UNDER the scan paths, not the scan roots themselves
+                current = d
+                dirs_to_check.add(current)
+                # Also add subdirectories that might now be empty
+                for child in d.iterdir():
+                    if child.is_dir():
+                        dirs_to_check.add(child)
+
+            # Check each directory recursively for empty dirs
+            empty_dirs = []
+            checked = set()
+
+            def check_dir_recursive(d: Path, depth: int = 0):
+                if depth > 15 or d in checked:
+                    return
+                checked.add(d)
+
+                if not d.exists() or not d.is_dir():
+                    return
+
+                try:
+                    children = list(d.iterdir())
+                except (OSError, PermissionError):
+                    return
+
+                if not children:
+                    # Directory is empty
+                    empty_dirs.append(d)
+                    return
+
+                # Check children that are directories
+                for child in children:
+                    if child.is_dir():
+                        check_dir_recursive(child, depth + 1)
+
+            for d in dirs_to_check:
+                check_dir_recursive(d)
+
+            # Also check all parent dirs recursively for emptiness
+            # Re-scan parent directories that may have become empty
+            all_parents = set()
+            for d in source_dirs:
+                p = d
+                for _ in range(15):
+                    p = p.parent
+                    all_parents.add(p)
+                    if p == p.parent:
+                        break
+
+            # Sort deepest first
+            empty_dirs.sort(key=lambda p: len(str(p)), reverse=True)
+
+            if not empty_dirs:
+                return
+
+            # Move empty dirs to ToBeDeleted
+            dest_base = Path(self.output_base) / self.empty_folder_dest
+            dest_base.mkdir(parents=True, exist_ok=True)
+
+            moved_count = 0
+            for empty_dir in empty_dirs:
+                if not empty_dir.exists():
+                    continue
+                # Don't move the output base itself or the scan root
+                try:
+                    empty_dir.relative_to(dest_base)
+                    continue  # Skip if inside ToBeDeleted already
+                except ValueError:
+                    pass
+
+                try:
+                    dest = dest_base / empty_dir.name
+                    if dest.exists():
+                        dest = dest.with_name(get_unique_filename(dest_base, empty_dir.name))
+                    shutil.move(str(empty_dir), str(dest))
+                    moved_count += 1
+                    self.logger.info(f"Moved empty folder: {empty_dir} -> {dest}")
+                except (OSError, PermissionError, shutil.Error) as e:
+                    self.logger.warning(f"Could not move empty folder {empty_dir}: {e}")
+
+            if moved_count:
+                self.logger.info(f"Moved {moved_count} empty folders to {dest_base}")
+
+        except Exception as e:
+            self.logger.warning(f"Empty folder cleanup error: {e}")
 
     def move_duplicates(self, duplicate_groups: list[dict],
                         output_base: str = None,
