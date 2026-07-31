@@ -119,7 +119,8 @@ class MetadataExtractor:
                     return value[0] / value[1]
                 return float(value)
 
-            gps_tags = {TAGS.get(k, str(k)): v for k, v in gps_raw.items()}
+            from PIL.ExifTags import GPSTAGS
+            gps_tags = {GPSTAGS.get(k, TAGS.get(k, str(k))): v for k, v in gps_raw.items()}
             lat = _convert(gps_tags.get("GPSLatitude"))
             lon = _convert(gps_tags.get("GPSLongitude"))
             lat_ref = gps_tags.get("GPSLatitudeRef", "N")
