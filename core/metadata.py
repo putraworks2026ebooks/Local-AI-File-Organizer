@@ -67,8 +67,10 @@ class MetadataExtractor:
 
                 exif = img._getexif() if hasattr(img, "_getexif") else None
                 if exif:
+                    # Use TAGS dict to resolve tag IDs to names (reliable across PIL versions)
+                    from PIL.ExifTags import TAGS
                     for tag_id, value in exif.items():
-                        tag = ExifBase(tag_id).name if hasattr(ExifBase, tag_id) else str(tag_id)
+                        tag = TAGS.get(tag_id, str(tag_id))
                         if tag in ("DateTimeOriginal", "DateTimeDigitized", "Make", "Model",
                                     "GPSInfo", "ExposureTime", "FNumber", "ISOSpeedRatings",
                                     "FocalLength", "LensModel"):
@@ -92,11 +94,10 @@ class MetadataExtractor:
     def _parse_gps(exif: dict) -> tuple[float, float] | None:
         """Parse EXIF GPSInfo into (latitude, longitude) decimals."""
         try:
-            from PIL.ExifTags import Base as ExifBase
+            from PIL.ExifTags import TAGS
             gps_id = None
             for tag_id, _ in exif.items():
-                tag = ExifBase(tag_id).name if hasattr(ExifBase, tag_id) else str(tag_id)
-                if tag == "GPSInfo":
+                if TAGS.get(tag_id) == "GPSInfo":
                     gps_id = tag_id
                     break
             if gps_id is None:
@@ -118,9 +119,7 @@ class MetadataExtractor:
                     return value[0] / value[1]
                 return float(value)
 
-            from PIL.ExifTags import Base as ExifBase
-            gps_tags = {ExifBase(k).name: v for k, v in gps_raw.items()
-                        if hasattr(ExifBase, k)}
+            gps_tags = {TAGS.get(k, str(k)): v for k, v in gps_raw.items()}
             lat = _convert(gps_tags.get("GPSLatitude"))
             lon = _convert(gps_tags.get("GPSLongitude"))
             lat_ref = gps_tags.get("GPSLatitudeRef", "N")
