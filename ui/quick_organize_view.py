@@ -318,6 +318,8 @@ class QuickOrganizeView(QWidget):
         self.go_btn.setObjectName("primary")
         self.go_btn.setStyleSheet("padding: 14px 28px; font-size: 15px;")
         self.go_btn.clicked.connect(self._on_go_btn)
+        btn_layout.addWidget(self.go_btn)
+
         self.gps_ai_btn = QPushButton("📍 Update GPS with AI")
         self.gps_ai_btn.setStyleSheet("padding: 14px 28px; font-size: 15px;")
         self.gps_ai_btn.setToolTip("Use AI to add country and road names to gps.md files")
