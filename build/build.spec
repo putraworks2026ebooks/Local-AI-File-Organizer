@@ -43,6 +43,7 @@ a = Analysis(
         'ui.duplicates_view',
         'ui.settings_view',
         'ui.logs_view',
+        'ui.quick_organize_view',
         'ui.theme',
         'utils',
         'utils.config',
