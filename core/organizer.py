@@ -287,29 +287,29 @@ class FileOrganizer:
             except Exception as e:
                 self.logger.warning(f"Failed to write GPS for {folder}: {e}")
 
-def _nominatim_lookup(lat: float, lon: float) -> str:
-    """Free reverse geocoding via OpenStreetMap Nominatim — no API key needed."""
-    import requests as _req
-    try:
-        resp = _req.get(
-            "https://nominatim.openstreetmap.org/reverse",
-            params={"lat": lat, "lon": lon, "format": "json", "zoom": 14},
-            headers={"User-Agent": "LocalAIFileOrganizer/1.0"},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            addr = data.get("address", {})
-            parts = []
-            for key in ("country", "state", "city", "town", "village", "road", "suburb"):
-                val = addr.get(key, "").strip()
-                if val and val not in parts:
-                    parts.append(val)
-            return ", ".join(parts[:4]) if parts else ""
-    except Exception:
-        pass
-    return ""
-
+    @staticmethod
+    def _nominatim_lookup(lat: float, lon: float) -> str:
+        """Free reverse geocoding via OpenStreetMap Nominatim — no API key needed."""
+        import requests as _req
+        try:
+            resp = _req.get(
+                "https://nominatim.openstreetmap.org/reverse",
+                params={"lat": lat, "lon": lon, "format": "json", "zoom": 14},
+                headers={"User-Agent": "LocalAIFileOrganizer/1.0"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                addr = data.get("address", {})
+                parts = []
+                for key in ("country", "state", "city", "town", "village", "road", "suburb"):
+                    val = addr.get(key, "").strip()
+                    if val and val not in parts:
+                        parts.append(val)
+                return ", ".join(parts[:4]) if parts else ""
+        except Exception:
+            pass
+        return ""
 
     def update_gps_with_ai(self, metadata_map: dict, ollama,
                              progress_callback: callable = None) -> int:
@@ -455,12 +455,12 @@ def _nominatim_lookup(lat: float, lon: float) -> str:
                             new_place = ", ".join(place_parts) if place_parts else ""
                         else:
                             self.logger.warning(f"GPS AI: Ollama returned empty response for {fname} — trying Nominatim fallback")
-                        new_place = _nominatim_lookup(lat_val, lon_val)
+                        new_place = self._nominatim_lookup(lat_val, lon_val)
                         if new_place:
                             self.logger.info(f"GPS AI: Nominatim fallback succeeded for {fname}: {new_place}")
                     except _json.JSONDecodeError as e:
                         self.logger.warning(f"GPS AI: JSON parse failed for {fname}: {e} — trying Nominatim fallback")
-                        new_place = _nominatim_lookup(lat_val, lon_val)
+                        new_place = self._nominatim_lookup(lat_val, lon_val)
                         if new_place:
                             self.logger.info(f"GPS AI: Nominatim fallback for {fname}: {new_place}")
                     except Exception as e:
