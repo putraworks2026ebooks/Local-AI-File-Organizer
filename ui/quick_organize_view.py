@@ -40,6 +40,8 @@ class QuickOrganizeWorker(QThread):
         self.use_ai = use_ai and ollama.is_available()
         self.bulk_mode = bulk_mode
         self._cancel = False
+        self._filter_category = "all"
+        self._metadata_map = {}
         self.logger = get_logger()
 
     def cancel(self):
@@ -184,10 +186,24 @@ class QuickOrganizeWorker(QThread):
         total = len(file_categories)
         if total == 0:
             return
+
+        # Extract metadata for all files (in worker thread, not UI)
+        self.status_update.emit("Extracting metadata for organize...")
+        for file_path in file_categories:
+            if self._cancel:
+                break
+            try:
+                meta = self.metadata_extractor.extract(file_path)
+                meta["category"] = file_categories[file_path]
+                self._metadata_map[file_path] = meta
+            except Exception:
+                self._metadata_map[file_path] = {}
+
         for i, (file_path, category) in enumerate(file_categories.items()):
             if self._cancel:
                 break
             metadata = self._metadata_map.get(file_path, {})
+            metadata["category"] = category
             success, msg, op_id = self.organizer.move_file(file_path, category, metadata)
             if success:
                 results["organized"] += 1
@@ -197,13 +213,19 @@ class QuickOrganizeWorker(QThread):
         self.db.conn.commit()
 
         # Write GPS files
-        if hasattr(self, '_metadata_map') and self._metadata_map:
-            self.organizer._write_gps_files(self._metadata_map)
+        if self._metadata_map:
+            try:
+                self.organizer._write_gps_files(self._metadata_map)
+            except Exception as e:
+                self.logger.warning(f"GPS write failed: {e}")
 
         # Clean up empty folders if enabled
         if self.organizer.move_empty_folders:
             self.status_update.emit("Cleaning up empty folders...")
-            self.organizer._cleanup_empty_folders(file_categories)
+            try:
+                self.organizer._cleanup_empty_folders(file_categories)
+            except Exception as e:
+                self.logger.warning(f"Cleanup failed: {e}")
 
 
 class QuickOrganizeView(QWidget):
