@@ -130,11 +130,14 @@ class SettingsView(QWidget):
         # Ollama cloud model presets (requires `ollama signin`)
         self.ai_model.insertSeparator(self.ai_model.count())
         cloud_presets = [
+            "glm-5.2:cloud",
+            "kimi-k2.7-code:cloud",
+            "minimax-m3:cloud",
+            "nemotron-3-super:cloud",
             "qwen3-coder:480b-cloud",
             "gpt-oss:120b-cloud",
             "gpt-oss:20b-cloud",
             "deepseek-v3.1:671b-cloud",
-            "kimi-k2.5:cloud",
         ]
         for m in cloud_presets:
             self.ai_model.addItem(m)
