@@ -25,7 +25,6 @@ a = Analysis(
         'core.scanner',
         'core.hasher',
         'core.ollama_client',
-        'core.cloud_ai_client',
         'core.organizer',
         'core.duplicate_finder',
         'core.metadata',

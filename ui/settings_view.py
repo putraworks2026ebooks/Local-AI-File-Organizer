@@ -16,7 +16,6 @@ from PySide6.QtCore import Qt, Signal
 
 from utils.config import ConfigManager
 from core.ollama_client import OllamaClient
-from core.cloud_ai_client import CloudAIClient
 from database.db_manager import DatabaseManager
 
 
@@ -576,7 +575,7 @@ class SettingsView(QWidget):
             )
 
     def _test_cloud_ai(self):
-        """Test cloud AI connection."""
+        """Test cloud AI connection via the unified client."""
         api_key = self.cloud_api_key.text().strip()
         base_url = self.cloud_base_url.text().strip()
         model = self.cloud_model.text().strip() or "gpt-4o-mini"
@@ -584,9 +583,10 @@ class SettingsView(QWidget):
             QMessageBox.warning(self, "No API Key",
                 "Enter your API key first.")
             return
-        client = CloudAIClient(api_key=api_key, base_url=base_url, model=model)
-        if client.is_available():
-            models = client.list_models()
+        # Temporarily switch to cloud mode to test
+        self.ollama.switch_to_cloud(api_key=api_key, base_url=base_url, model=model)
+        if self.ollama.is_available():
+            models = self.ollama.list_models()
             model_list = ", ".join(models[:10]) if models else model
             QMessageBox.information(
                 self, "Connection OK",

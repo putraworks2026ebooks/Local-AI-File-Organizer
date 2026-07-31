@@ -32,7 +32,6 @@ from utils.logger import get_logger
 from database.db_manager import DatabaseManager
 from database.operations import OperationHistory
 from core.ollama_client import OllamaClient
-from core.cloud_ai_client import CloudAIClient
 from core.organizer import FileOrganizer
 from core.duplicate_finder import DuplicateFinder
 from core.metadata import MetadataExtractor
@@ -53,29 +52,23 @@ class MainWindow(QMainWindow):
         self.db = DatabaseManager(db_path)
         self.op_history = OperationHistory(self.db)
 
-        # Initialize core services — choose local Ollama or cloud AI
-        ai_provider = self.config_manager.ollama_settings.get("ai_provider", "local")
-        cloud_config = self.config.get("cloud_ai", {})
-
-        if ai_provider == "cloud" and cloud_config.get("api_key"):
-            self.ollama = CloudAIClient(
-                api_key=cloud_config.get("api_key", ""),
-                base_url=cloud_config.get("base_url", "https://api.openai.com/v1"),
-                model=cloud_config.get("model", "gpt-4o-mini"),
-                timeout=cloud_config.get("timeout", 60),
-                temperature=cloud_config.get("temperature", 0.1),
-                max_tokens=cloud_config.get("max_tokens", 500),
-            )
-            self._ai_provider = "cloud"
-        else:
-            self.ollama = OllamaClient(
-                server_url=self.config_manager.ollama_settings.get("server_url", "http://localhost:11434"),
-                model=self.config_manager.ollama_settings.get("model", "qwen2.5:3b"),
-                timeout=self.config_manager.ollama_settings.get("timeout", 60),
-                temperature=self.config_manager.ollama_settings.get("temperature", 0.1),
-                max_tokens=self.config_manager.ollama_settings.get("max_tokens", 100),
-            )
-            self._ai_provider = "local"
+        # Initialize core services — unified AI client (local or cloud)
+        ollama_cfg = self.config_manager.ollama_settings
+        cloud_cfg = self.config.get("cloud_ai", {})
+        self.ollama = OllamaClient(
+            server_url=ollama_cfg.get("server_url", "http://localhost:11434"),
+            model=ollama_cfg.get("model", "qwen2.5:3b"),
+            timeout=ollama_cfg.get("timeout", 60),
+            temperature=ollama_cfg.get("temperature", 0.1),
+            max_tokens=ollama_cfg.get("max_tokens", 100),
+            ai_provider=ollama_cfg.get("ai_provider", "local"),
+            cloud_api_key=cloud_cfg.get("api_key", ""),
+            cloud_base_url=cloud_cfg.get("base_url", "https://api.openai.com/v1"),
+            cloud_model=cloud_cfg.get("model", "gpt-4o-mini"),
+            cloud_timeout=cloud_cfg.get("timeout", 60),
+            cloud_temperature=cloud_cfg.get("temperature", 0.1),
+            cloud_max_tokens=cloud_cfg.get("max_tokens", 500),
+        )
         self.organizer = FileOrganizer(self.db, self.op_history, self.config)
         self.duplicate_finder = DuplicateFinder()
         self.metadata_extractor = MetadataExtractor()
@@ -316,50 +309,24 @@ class MainWindow(QMainWindow):
         self.dashboard.update_stats()
 
     def _on_settings_changed(self, config: dict):
-        """Handle settings change — switch AI client if needed."""
-        new_provider = config.get("ollama", {}).get("ai_provider", "local")
+        """Handle settings change — update unified AI client."""
+        ollama_cfg = config.get("ollama", {})
         cloud_cfg = config.get("cloud_ai", {})
-
-        if new_provider == "cloud" and cloud_cfg.get("api_key"):
-            if not isinstance(self.ollama, CloudAIClient):
-                self.ollama = CloudAIClient(
-                    api_key=cloud_cfg.get("api_key", ""),
-                    base_url=cloud_cfg.get("base_url", "https://api.openai.com/v1"),
-                    model=cloud_cfg.get("model", "gpt-4o-mini"),
-                    timeout=cloud_cfg.get("timeout", 60),
-                    temperature=cloud_cfg.get("temperature", 0.1),
-                    max_tokens=cloud_cfg.get("max_tokens", 500),
-                )
-                self._ai_provider = "cloud"
-                self.settings_view.ollama = self.ollama
-            else:
-                self.ollama.update_settings(
-                    api_key=cloud_cfg.get("api_key", ""),
-                    base_url=cloud_cfg.get("base_url", ""),
-                    model=cloud_cfg.get("model", ""),
-                    timeout=cloud_cfg.get("timeout", 60),
-                    temperature=cloud_cfg.get("temperature", 0.1),
-                    max_tokens=cloud_cfg.get("max_tokens", 500),
-                )
-        else:
-            if not isinstance(self.ollama, OllamaClient):
-                self.ollama = OllamaClient(
-                    server_url=config["ollama"]["server_url"],
-                    model=config["ollama"]["model"],
-                    timeout=config["ollama"]["timeout"],
-                    temperature=config["ollama"]["temperature"],
-                    max_tokens=config["ollama"]["max_tokens"],
-                )
-                self._ai_provider = "local"
-                self.settings_view.ollama = self.ollama
-            else:
-                self.ollama.update_settings(
-                    server_url=config["ollama"]["server_url"],
-                    model=config["ollama"]["model"],
-                    timeout=config["ollama"]["timeout"],
-                    temperature=config["ollama"]["temperature"],
-                    max_tokens=config["ollama"]["max_tokens"],
-                )
+        self.ollama.update_settings(
+            server_url=ollama_cfg.get("server_url"),
+            model=ollama_cfg.get("model"),
+            timeout=ollama_cfg.get("timeout"),
+            temperature=ollama_cfg.get("temperature"),
+            max_tokens=ollama_cfg.get("max_tokens"),
+            ai_provider=ollama_cfg.get("ai_provider", "local"),
+            api_key=cloud_cfg.get("api_key", ""),
+            base_url=cloud_cfg.get("base_url", ""),
+            cloud_timeout=cloud_cfg.get("timeout"),
+            cloud_temperature=cloud_cfg.get("temperature"),
+            cloud_max_tokens=cloud_cfg.get("max_tokens"),
+        )
+        if cloud_cfg.get("model"):
+            self.ollama.cloud_model = cloud_cfg["model"]
 
     def _on_quick_organize_finished(self, results: dict):
         """Handle quick organize completion."""
