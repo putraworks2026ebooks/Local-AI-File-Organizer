@@ -612,6 +612,7 @@ class QuickOrganizeView(QWidget):
         # Copy metadata map from worker so GPS AI button can use it
         if self.worker and hasattr(self.worker, '_metadata_map'):
             self._metadata_map = self.worker._metadata_map
+        self.stage_label.setText("Stage: Complete")
         self.progress_bar.setVisible(False)
         self.go_btn.setText("Go -- Scan + Analyze + Organize")
         self.go_btn.setStyleSheet("padding: 14px 28px; font-size: 15px;")

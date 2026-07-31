@@ -328,10 +328,15 @@ class FileOrganizer:
                         parts = [p.strip() for p in line.split("|")[1:-1]]
                         if len(parts) >= 4:
                             try:
+                                place_str = parts[0] if parts[0] != "—" else ""
+                                # Treat coordinate placeholders as empty
+                                import re as _re
+                                if _re.match(r"^-?\d+\.\d+,\s*-?\d+\.\d+$", place_str):
+                                    place_str = ""
                                 existing[parts[3]] = {
                                     "lat": float(parts[1]),
                                     "lon": float(parts[2]),
-                                    "place": parts[0] if parts[0] != "—" else "",
+                                    "place": place_str,
                                 }
                             except (ValueError, IndexError):
                                 pass
@@ -346,15 +351,15 @@ class FileOrganizer:
                 if entry.get("place"):
                     continue  # Already has a place name
 
-                # Ask Ollama: given lat/lon, what country and road?
+                # Ask Ollama: given lat/lon, what country, state, city, road?
+                json_template = '{"country": "<country>", "state": "<state>", "city": "<city>", "road": "<road>"}'
                 prompt = (
                     f"Given the GPS coordinates latitude {entry['lat']}, longitude {entry['lon']}, "
-                    f"what is the country and nearest road or area name? "
-                    f"Return a short place description (e.g. 'Singapore, Orchard Road'). "
-                    'Return JSON only: {"place": "<description>"}' 
+                    f"what is the country, state/province, city, and nearest road or area name? "
+                    f"Return JSON only: {json_template}"
                 )
                 messages = [
-                    {"role": "system", "content": "You are a geocoding assistant. Given GPS coordinates, return the country and nearest road or area name. Return only valid JSON."},
+                    {"role": "system", "content": "You are a geocoding assistant. Given GPS coordinates, return the country, state/province, city, and nearest road or area name. Return only valid JSON with keys: country, state, city, road."},
                     {"role": "user", "content": prompt},
                 ]
 
@@ -362,7 +367,13 @@ class FileOrganizer:
                     response = ollama.chat(messages)
                     if response:
                         result = _json.loads(response.strip())
-                        place = result.get("place", "").strip()
+                        # Build place name from components
+                        parts = []
+                        for key in ("country", "state", "city", "road"):
+                            val = result.get(key, "").strip()
+                            if val and val.lower() not in ("unknown", "n/a", "none"):
+                                parts.append(val)
+                        place = ", ".join(parts) if parts else ""
                         if place:
                             entry["place"] = place
                             count += 1
