@@ -57,7 +57,7 @@ class FileOrganizer:
         if not self.output_base:
             return Path(file_path).parent if file_path else Path.cwd()
 
-        base = Path(self.output_base) / sanitize_filename(category)
+        base = Path(self.output_base) / (sanitize_filename(category) + "-AI")
 
         # Per-category date structure
         struct = self.date_structures.get(category, "none")
@@ -251,6 +251,9 @@ class FileOrganizer:
 
             # Move empty dirs to ToBeDeleted
             dest_base = Path(self.output_base) / self.empty_folder_dest
+
+            # Skip -AI folders (they are our own output, not source folders)
+            empty_dirs = [d for d in empty_dirs if not d.name.endswith("-AI")]
             dest_base.mkdir(parents=True, exist_ok=True)
 
             moved_count = 0

@@ -54,7 +54,7 @@ class TestFileOrganizer:
         """Test category path generation."""
         organizer.output_base = str(tmp_path)
         path = organizer.get_category_path("Documents")
-        assert path == tmp_path / "Documents"
+        assert path == tmp_path / "Documents-AI"
 
     def test_get_category_path_with_photos(self, organizer, tmp_path):
         """Test photo path includes year/month structure."""
@@ -69,7 +69,7 @@ class TestFileOrganizer:
         path = organizer.get_category_path("Pictures", str(img_path))
         # Should include year/month subdirectories
         parts = path.parts
-        assert "Pictures" in parts
+        assert "Pictures-AI" in parts
 
     def test_move_file(self, organizer, temp_source_dir, tmp_path):
         """Test moving a file to a category folder."""
@@ -98,7 +98,7 @@ class TestFileOrganizer:
 
         organizer.move_file(str(src), "Finance")
 
-        assert (tmp_path / "output" / "Finance").exists()
+        assert (tmp_path / "output" / "Finance-AI").exists()
 
     def test_find_empty_folders(self, organizer, tmp_path):
         """Test finding empty folders."""
@@ -139,14 +139,14 @@ class TestFileOrganizer:
         assert all(r["success"] for r in results)
 
         # Documents go to a flat category folder
-        assert (tmp_path / "output" / "Documents" / "doc1.txt").exists()
+        assert (tmp_path / "output" / "Documents-AI" / "doc1.txt").exists()
 
         # Pictures are organized by year/month (photo_organize_by_date is True)
         # The file modification time is used, so check the current year/month
         now = datetime.now()
         year = str(now.year)
         month = f"{now.month:02d}"
-        photo_path = tmp_path / "output" / "Pictures" / year / month / "image1.jpg"
+        photo_path = tmp_path / "output" / "Pictures-AI" / year / month / "image1.jpg"
         assert photo_path.exists(), f"Expected image at {photo_path}"
 
     def test_organize_files_no_date_organization(self, temp_db, temp_source_dir, tmp_path):
@@ -171,5 +171,5 @@ class TestFileOrganizer:
 
         assert len(results) == 2
         assert all(r["success"] for r in results)
-        assert (tmp_path / "output" / "Documents" / "doc1.txt").exists()
-        assert (tmp_path / "output" / "Pictures" / "image1.jpg").exists()
+        assert (tmp_path / "output" / "Documents-AI" / "doc1.txt").exists()
+        assert (tmp_path / "output" / "Pictures-AI" / "image1.jpg").exists()

@@ -56,6 +56,10 @@ class ScanWorker(QThread):
         """Determine if a path should be skipped."""
         name = path.name
 
+        # Skip -AI folders (already organized output, don't re-scan)
+        if name.endswith("-AI"):
+            return True
+
         if self.blacklist and any(name.lower() == b.lower() for b in self.blacklist):
             return True
 

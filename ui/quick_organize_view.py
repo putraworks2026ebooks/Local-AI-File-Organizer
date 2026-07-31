@@ -106,6 +106,8 @@ class QuickOrganizeWorker(QThread):
                     break
                 if skip_system:
                     dirnames[:] = [d for d in dirnames if d not in system_folders]
+                # Skip -AI folders (already organized output)
+                dirnames[:] = [d for d in dirnames if not d.endswith("-AI")]
                 for filename in filenames:
                     if self._cancel:
                         break
