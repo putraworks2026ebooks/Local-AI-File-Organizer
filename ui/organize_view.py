@@ -163,6 +163,30 @@ class OrganizeView(QWidget):
         opts_group.setLayout(opts_layout)
         layout.addWidget(opts_group)
 
+        # Category filter
+        filter_group = QGroupBox("Category Filter")
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Organize only:"))
+        self.category_filter = QComboBox()
+        self.category_filter.addItem("All categories", "all")
+        import json as _json
+        from pathlib import Path as _Path
+        _cat_path = _Path(__file__).parent.parent / "config" / "categories.json"
+        with open(_cat_path, "r") as _f:
+            _cats = [c["name"] for c in _json.load(_f)["categories"]]
+        try:
+            _custom = self.db.get_custom_categories()
+            _cats.extend(c["name"] for c in _custom if c["name"] not in _cats)
+        except Exception:
+            pass
+        for _c in _cats:
+            self.category_filter.addItem(_c, _c)
+        self.category_filter.currentIndexChanged.connect(self._apply_category_filter)
+        filter_layout.addWidget(self.category_filter)
+        filter_layout.addStretch()
+        filter_group.setLayout(filter_layout)
+        layout.addWidget(filter_group)
+
         # Preview table
         preview_group = QGroupBox("Proposed Actions (Review before applying)")
         preview_layout = QVBoxLayout()
@@ -216,6 +240,7 @@ class OrganizeView(QWidget):
 
     def set_file_categories(self, file_categories: dict):
         self.file_categories = file_categories
+        self._all_file_categories = dict(file_categories)
         self.status_label.setText(f"{len(file_categories)} files ready for organization")
         self._generate_preview()
 
@@ -271,6 +296,28 @@ class OrganizeView(QWidget):
                     structures[cat] = struct
         return structures
 
+    def _apply_category_filter(self):
+        """Filter file_categories to only show selected category."""
+        if not self.file_categories:
+            return
+        selected = self.category_filter.currentData()
+        if selected == "all":
+            # Restore full list
+            if hasattr(self, "_all_file_categories") and self._all_file_categories:
+                self.file_categories = dict(self._all_file_categories)
+        else:
+            # Save full list if not already saved
+            if not hasattr(self, "_all_file_categories"):
+                self._all_file_categories = dict(self.file_categories)
+            else:
+                self._all_file_categories = dict(self.file_categories)
+            # Filter to only selected category
+            self.file_categories = {
+                k: v for k, v in self._all_file_categories.items() if v == selected
+            }
+        self.status_label.setText(f"{len(self.file_categories)} files ready for organization")
+        self._generate_preview()
+
     def set_config(self, config: dict):
         self.config = config
         self.organizer.update_config(config)
@@ -313,7 +360,15 @@ class OrganizeView(QWidget):
 
         for i in range(preview_count):
             file_path, category = items[i]
-            dest_dir = self.organizer.get_category_path(category, file_path)
+            # Quick metadata for preview path (camera maker/model)
+            preview_meta = {}
+            try:
+                from core.metadata import MetadataExtractor
+                meta_ext = MetadataExtractor(self.config)
+                preview_meta = meta_ext.extract(Path(file_path))
+            except Exception:
+                pass
+            dest_dir = self.organizer.get_category_path(category, file_path, preview_meta)
             dest_path = dest_dir / Path(file_path).name
 
             self.preview_table.setItem(i, 0, QTableWidgetItem(Path(file_path).name))
@@ -359,9 +414,24 @@ class OrganizeView(QWidget):
         self.progress_bar.setValue(0)
         self.organize_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
+        self.status_label.setText("Extracting metadata...")
+
+        # Extract metadata for camera maker/model folders
+        metadata_map = {}
+        try:
+            from core.metadata import MetadataExtractor
+            meta_ext = MetadataExtractor(self.config)
+            for file_path in self.file_categories:
+                try:
+                    metadata_map[file_path] = meta_ext.extract(Path(file_path))
+                except Exception:
+                    metadata_map[file_path] = {}
+        except Exception:
+            pass
+
         self.status_label.setText("Organizing...")
 
-        self.organize_worker = OrganizeWorker(self.file_categories, self.organizer)
+        self.organize_worker = OrganizeWorker(self.file_categories, self.organizer, metadata_map)
         self.organize_worker.progress.connect(self._on_progress)
         self.organize_worker.status_update.connect(self._on_status)
         self.organize_worker.finished_organize.connect(self._on_finished)

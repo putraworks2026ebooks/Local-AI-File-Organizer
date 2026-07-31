@@ -59,6 +59,20 @@ class FileOrganizer:
 
         base = Path(self.output_base) / (sanitize_filename(category) + "-AI")
 
+        # Camera maker/model subfolders (for images with EXIF data)
+        # Path: Pictures-AI/Canon/EOS_R5/2024/01/photo.jpg
+        if metadata and category in ("Pictures", "Videos"):
+            make = metadata.get("Make")
+            model = metadata.get("Model")
+            if make:
+                make_clean = sanitize_filename(str(make).strip())
+                if make_clean:
+                    base = base / make_clean
+            if model:
+                model_clean = sanitize_filename(str(model).strip())
+                if model_clean:
+                    base = base / model_clean
+
         # Per-category date structure
         struct = self.date_structures.get(category, "none")
 

@@ -176,11 +176,19 @@ class QuickOrganizeWorker(QThread):
         return file_categories
 
     def _organize_stage(self, file_categories, results):
+        # Apply category filter
+        filter_cat = self._filter_category
+        if filter_cat and filter_cat != "all":
+            file_categories = {k: v for k, v in file_categories.items() if v == filter_cat}
+
         total = len(file_categories)
+        if total == 0:
+            return
         for i, (file_path, category) in enumerate(file_categories.items()):
             if self._cancel:
                 break
-            success, msg, op_id = self.organizer.move_file(file_path, category)
+            metadata = self._metadata_map.get(file_path, {})
+            success, msg, op_id = self.organizer.move_file(file_path, category, metadata)
             if success:
                 results["organized"] += 1
             else:
