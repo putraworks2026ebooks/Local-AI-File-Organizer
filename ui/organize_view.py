@@ -124,17 +124,21 @@ class OrganizeView(QWidget):
         title.setStyleSheet("font-size: 20px; font-weight: bold; padding: 10px;")
         layout.addWidget(title)
 
-        # Output info (read from Settings → Organize tab)
-        info_group = QGroupBox("Output (configured in Settings → Organize)")
-        info_layout = QHBoxLayout()
-        info_layout.addWidget(QLabel("Output folder:"))
+        # Output path (stays in this tab)
+        path_group = QGroupBox("Output Destination")
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(QLabel("Base folder:"))
         self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("Set in Settings → Organize tab...")
+        self.output_edit.setPlaceholderText("Select destination folder...")
         self.output_edit.setText(self.config.get("organize", {}).get("output_base", ""))
-        self.output_edit.setReadOnly(True)
-        info_layout.addWidget(self.output_edit)
+        path_layout.addWidget(self.output_edit)
+        browse_btn = QPushButton("📁 Browse")
+        browse_btn.clicked.connect(self._browse_output)
+        path_layout.addWidget(browse_btn)
+        path_group.setLayout(path_layout)
+        layout.addWidget(path_group)
 
-        # Show current settings summary
+        # Settings summary (options are in Settings → Organize tab)
         org_cfg = self.config.get("organize", {})
         summary_parts = []
         if org_cfg.get("photo_organize_by_date", True):
@@ -146,12 +150,9 @@ class OrganizeView(QWidget):
         max_sz = org_cfg.get("max_organize_size_mb", 0)
         summary_parts.append(f"Max size: {max_sz if max_sz > 0 else 'No limit'}")
         summary_parts.append("Bulk" if org_cfg.get("bulk_mode", True) else "1-by-1")
-        self.settings_summary = QLabel(" | ".join(summary_parts))
-        self.settings_summary.setStyleSheet("color: #666; font-size: 12px;")
-        info_layout.addWidget(self.settings_summary)
-
-        info_group.setLayout(info_layout)
-        layout.addWidget(info_group)
+        summary_label = QLabel("Options: " + " | ".join(summary_parts) + "  (configure in Settings → Organize)")
+        summary_label.setStyleSheet("color: #888; font-size: 12px; padding: 4px;")
+        layout.addWidget(summary_label)
 
         # Category filter
         filter_group = QGroupBox("Category Filter")
@@ -378,9 +379,9 @@ class OrganizeView(QWidget):
             QMessageBox.warning(self, "No Files", "No files to organize.")
             return
 
-        output_base = self.config.get("organize", {}).get("output_base", "")
+        output_base = self.output_edit.text().strip()
         if not output_base:
-            QMessageBox.warning(self, "No Output", "Set output folder in Settings → Organize tab first.")
+            QMessageBox.warning(self, "No Output", "Please select an output folder.")
             return
 
         reply = QMessageBox.question(
@@ -392,7 +393,9 @@ class OrganizeView(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        # Config already set from Settings — just update organizer
+        # Save output from this tab to config, other options come from Settings
+        organize_config = self.config.setdefault("organize", {})
+        organize_config["output_base"] = output_base
         self.organizer.update_config(self.config)
 
         self.progress_bar.setVisible(True)

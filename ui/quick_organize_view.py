@@ -286,10 +286,13 @@ class QuickOrganizeView(QWidget):
         output_layout = QHBoxLayout()
         output_layout.addWidget(QLabel("Organize into:"))
         self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("Set in Settings → Organize tab...")
+        self.output_edit.setPlaceholderText("Select destination folder...")
         self.output_edit.setText(self.config.get("organize", {}).get("output_base", ""))
-        self.output_edit.setReadOnly(True)
         output_layout.addWidget(self.output_edit)
+
+        browse_btn = QPushButton("Browse")
+        browse_btn.clicked.connect(self._browse_output)
+        output_layout.addWidget(browse_btn)
         output_group.setLayout(output_layout)
         layout.addWidget(output_group)
 
@@ -406,14 +409,15 @@ class QuickOrganizeView(QWidget):
             QMessageBox.warning(self, "No Folders", "Add at least one folder to organize.")
             return
 
-        # Read output from config (set in Settings → Organize tab)
+        # Read output from the field in this tab
         organize_config = self.config.setdefault("organize", {})
-        output_base = organize_config.get("output_base", "")
+        output_base = self.output_edit.text().strip()
         if not output_base:
-            QMessageBox.warning(self, "No Output", "Set output folder in Settings → Organize tab first.")
+            QMessageBox.warning(self, "No Output", "Select a destination folder.")
             return
+        organize_config["output_base"] = output_base
 
-        # Config is already set from Settings — just update organizer
+        # Other options come from Settings → Organize tab
         self.organizer.update_config(self.config)
 
         use_ai = self.config.get("analyze", {}).get("use_ai", False) and self.ollama.is_available()
