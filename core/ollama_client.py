@@ -83,18 +83,32 @@ class OllamaClient:
 
         return None
 
-    def chat(self, messages: list[dict], stream: bool = False) -> Optional[str]:
-        """Send a chat request to Ollama."""
+    def chat(self, messages: list[dict], stream: bool = False,
+             use_json_format: bool = True, num_predict: int = None) -> Optional[str]:
+        """Send a chat request to Ollama.
+
+        Args:
+            messages: list of {role, content} dicts.
+            stream: if True, stream response (not used here).
+            use_json_format: if True, force JSON output mode. Set False
+                for tasks where the model might not know the answer and
+                would return empty in forced JSON mode.
+            num_predict: override max_tokens for this request.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": stream,
             "options": {
                 "temperature": self.temperature,
-                "num_predict": self.max_tokens,
+                "num_predict": num_predict if num_predict else self.max_tokens,
             },
-            "format": "json",
         }
+        if use_json_format:
+            payload["format"] = "json"
 
         try:
             resp = requests.post(
@@ -106,7 +120,17 @@ class OllamaClient:
                 data = resp.json()
                 message = data.get("message", {})
                 content = message.get("content", "")
+                if not content:
+                    logger.warning(
+                        f"Ollama returned empty content. "
+                        f"Status: {resp.status_code}, "
+                        f"Response: {str(data)[:300]}"
+                    )
                 return content
+            else:
+                logger.warning(
+                    f"Ollama HTTP {resp.status_code}: {resp.text[:300]}"
+                )
         except requests.RequestException as e:
             raise ConnectionError(f"Ollama chat request failed: {e}")
 

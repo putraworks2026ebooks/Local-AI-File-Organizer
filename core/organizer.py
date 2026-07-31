@@ -66,7 +66,7 @@ class FileOrganizer:
             model = metadata.get("Model")
             parts = []
             if make:
-                make_clean = sanitize_filename(str(make).strip())
+                make_clean = sanitize_filename(str(make).strip().title())
                 if make_clean:
                     parts.append(make_clean)
             if model:
@@ -403,7 +403,11 @@ class FileOrganizer:
 
                     new_place = ""
                     try:
-                        response = ollama.chat(messages)
+                        response = ollama.chat(
+                            messages,
+                            use_json_format=False,
+                            num_predict=500,
+                        )
                         if response:
                             self.logger.info(f"GPS AI: Ollama response for {fname}: {response[:200]}")
                             # Strip markdown code fences if present
