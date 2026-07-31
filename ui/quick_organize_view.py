@@ -95,6 +95,8 @@ class QuickOrganizeWorker(QThread):
         max_size = scan_config.get("max_file_size_mb", 512) * 1024 * 1024
         skip_system = scan_config.get("skip_system_folders", True)
         system_folders = set(scan_config.get("system_folders", []))
+        blacklist = set(b.lower() for b in scan_config.get("blacklist", []))
+        whitelist = set(w.lower() for w in scan_config.get("whitelist", []))
 
         all_files = []
         for scan_path in self.scan_paths:
@@ -106,10 +108,20 @@ class QuickOrganizeWorker(QThread):
             for dirpath, dirnames, filenames in os.walk(root):
                 if self._cancel:
                     break
-                if skip_system:
-                    dirnames[:] = [d for d in dirnames if d not in system_folders]
-                # Skip -AI folders (already organized output)
-                dirnames[:] = [d for d in dirnames if not d.endswith("-AI")]
+                # Filter directories: skip system folders, -AI output, blacklist/whitelist
+                filtered_dirs = []
+                for d in dirnames:
+                    dl = d.lower()
+                    if d.endswith("-AI"):
+                        continue
+                    if skip_system and dl in (sf.lower() for sf in system_folders):
+                        continue
+                    if blacklist and dl in blacklist:
+                        continue
+                    if whitelist and dl not in whitelist:
+                        continue
+                    filtered_dirs.append(d)
+                dirnames[:] = filtered_dirs
                 for filename in filenames:
                     if self._cancel:
                         break
@@ -123,14 +135,25 @@ class QuickOrganizeWorker(QThread):
                         continue
                     if size > max_size:
                         continue
-                    all_files.append({
+                    file_data = {
                         "file_path": str(filepath),
                         "file_name": filepath.name,
                         "extension": ext,
                         "size_bytes": size,
                         "scanned_at": datetime.now().isoformat(),
-                    })
+                    }
+                    all_files.append(file_data)
+                    # Save to DB (same as Scan tab)
+                    try:
+                        self.db.upsert_file(file_data)
+                    except Exception:
+                        pass
             self.progress.emit("Scanning", len(all_files), 0)
+        # Flush DB
+        try:
+            self.db.conn.commit()
+        except Exception:
+            pass
         return all_files
 
     def _analyze_stage(self, files, results):
@@ -140,6 +163,13 @@ class QuickOrganizeWorker(QThread):
         with open(categories_path, "r") as f:
             cat_config = json.load(f)
         categories = [c["name"] for c in cat_config["categories"]]
+
+        # Add custom categories from DB (same as Analyze tab)
+        try:
+            custom = self.db.get_custom_categories()
+            categories.extend(c["name"] for c in custom if c["name"] not in categories)
+        except Exception:
+            pass
 
         rule_classifier = RuleBasedClassifier(categories)
         file_categories = {}
@@ -152,17 +182,60 @@ class QuickOrganizeWorker(QThread):
             category = None
 
             if self.use_ai:
+                # Extract metadata (same as AnalyzeWorker)
+                metadata = {}
+                try:
+                    metadata = self.metadata_extractor.extract(file_path)
+                except Exception:
+                    pass
+
+                # Read content for documents (same as AnalyzeWorker)
+                content_summary = None
+                try:
+                    content_summary = self.content_reader.read_summary(file_path, max_length=500)
+                except Exception:
+                    pass
+
+                # OCR for scanned PDFs (same as AnalyzeWorker)
+                if not content_summary and self.ocr and self.ocr.is_available():
+                    try:
+                        content_summary = self.ocr.extract_text(file_path, max_length=500)
+                    except Exception:
+                        pass
+
                 file_info = {
                     "file_name": file_data.get("file_name", ""),
                     "extension": file_data.get("extension", ""),
-                    "metadata": {},
+                    "metadata": metadata,
                 }
                 try:
-                    category = self.ollama.classify_file(file_info, categories)
+                    category = self.ollama.classify_file(file_info, categories, content_summary)
                 except Exception:
                     category = None
+
+                # If AI fails or returns Miscellaneous, try rule-based as fallback
                 if not category or category == "Miscellaneous":
-                    category = rule_classifier.classify(file_data)
+                    rule_category = rule_classifier.classify(file_data)
+                    if rule_category and rule_category != "Miscellaneous":
+                        category = rule_category
+
+                # Save analysis results to DB (same as AnalyzeWorker)
+                if category:
+                    file_data["category"] = category
+                    file_data["metadata_json"] = json.dumps(metadata, default=str) if metadata else None
+                    file_data["content_summary"] = content_summary
+                    try:
+                        self.db.upsert_file(file_data)
+                    except Exception:
+                        pass
+            else:
+                category = rule_classifier.classify(file_data)
+                # Save to DB
+                file_data["category"] = category
+                try:
+                    self.db.upsert_file(file_data)
+                except Exception:
+                    pass
 
             if not category:
                 category = rule_classifier.classify(file_data)
@@ -174,6 +247,12 @@ class QuickOrganizeWorker(QThread):
             dest = str(self.organizer.get_category_path(category, file_path) / Path(file_path).name)
             self.file_processed.emit(file_data.get("file_name", ""), category, dest)
             self.progress.emit("Analyzing", i + 1, total)
+
+        # Flush DB
+        try:
+            self.db.conn.commit()
+        except Exception:
+            pass
 
         return file_categories
 

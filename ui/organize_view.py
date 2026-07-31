@@ -89,14 +89,23 @@ class OrganizeWorker(QThread):
             if processed % 100 == 0:
                 self.status_update.emit(f"Organizing: {processed}/{total} ({success_count} moved)")
 
-        # Write GPS files after organizing
+        # Write GPS files after organizing (same as Quick Organize)
         if not self._cancel and self.metadata_map:
             self.status_update.emit("Writing GPS data...")
             try:
                 self.organizer._write_gps_files(self.metadata_map)
             except Exception as e:
-                self.logger = get_logger() if False else None
-                pass
+                logger = get_logger()
+                logger.warning(f"GPS write failed: {e}")
+
+        # Clean up empty folders (same as Quick Organize)
+        if not self._cancel and self.organizer.move_empty_folders:
+            self.status_update.emit("Cleaning up empty folders...")
+            try:
+                self.organizer._cleanup_empty_folders(self.file_categories)
+            except Exception as e:
+                logger = get_logger()
+                logger.warning(f"Cleanup failed: {e}")
 
         self.status_update.emit(f"Done: {success_count}/{total} files moved")
         self.finished_organize.emit(results)
