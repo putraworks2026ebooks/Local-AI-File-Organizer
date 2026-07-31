@@ -318,7 +318,11 @@ class QuickOrganizeView(QWidget):
         self.go_btn.setObjectName("primary")
         self.go_btn.setStyleSheet("padding: 14px 28px; font-size: 15px;")
         self.go_btn.clicked.connect(self._on_go_btn)
-        btn_layout.addWidget(self.go_btn)
+        self.gps_ai_btn = QPushButton("📍 Update GPS with AI")
+        self.gps_ai_btn.setStyleSheet("padding: 14px 28px; font-size: 15px;")
+        self.gps_ai_btn.setToolTip("Use AI to add country and road names to gps.md files")
+        self.gps_ai_btn.clicked.connect(self._update_gps_with_ai)
+        btn_layout.addWidget(self.gps_ai_btn)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
@@ -440,6 +444,61 @@ class QuickOrganizeView(QWidget):
         self.worker.status_update.connect(self._on_status)
         self.worker.finished_all.connect(self._on_finished)
         self.worker.start()
+
+    def _update_gps_with_ai(self):
+        """Update gps.md files with AI-generated country and road names."""
+        if not self._metadata_map or not any(
+            m.get("GPSLatitude") for m in self._metadata_map.values()
+        ):
+            QMessageBox.information(self, "No GPS Data",
+                "No GPS data found. Run a scan first on photos with GPS EXIF data.")
+            return
+
+        if not self.ollama or not self.ollama.is_available():
+            QMessageBox.warning(self, "Ollama Not Available",
+                "Ollama server is not running. Start Ollama to use AI GPS updates.\n\n"
+                "gps.md files will still have coordinates but without place names.")
+            return
+
+        self.gps_ai_btn.setEnabled(False)
+        self.gps_ai_btn.setText("📍 Updating...")
+        self.status_label.setText("Updating GPS places with AI...")
+
+        from PySide6.QtCore import QThread, Signal
+
+        class GpsUpdateWorker(QThread):
+            progress = Signal(str, str)
+            finished_signal = Signal(int)
+
+            def __init__(self, organizer, metadata_map, ollama):
+                super().__init__()
+                self.organizer = organizer
+                self.metadata_map = metadata_map
+                self.ollama = ollama
+
+            def run(self):
+                count = self.organizer.update_gps_with_ai(
+                    self.metadata_map, self.ollama,
+                    progress_callback=lambda f, p: self.progress.emit(f, p)
+                )
+                self.finished_signal.emit(count)
+
+        self._gps_worker = GpsUpdateWorker(
+            self.organizer, self._metadata_map, self.ollama
+        )
+        self._gps_worker.progress.connect(
+            lambda fname, place: self.status_label.setText(f"GPS: {fname} -> {place}")
+        )
+        self._gps_worker.finished_signal.connect(self._gps_update_done)
+        self._gps_worker.start()
+
+    def _gps_update_done(self, count):
+        self.gps_ai_btn.setEnabled(True)
+        self.gps_ai_btn.setText("📍 Update GPS with AI")
+        if count > 0:
+            self.status_label.setText(f"✅ GPS updated: {count} photos got place names")
+        else:
+            self.status_label.setText("GPS update complete (no new places added)")
 
     def _cancel(self):
         if self.worker and self.worker.isRunning():

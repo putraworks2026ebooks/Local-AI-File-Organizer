@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
         self.scan_view = ScanView(self.config, self.db, self.ollama)
         self.analyze_view = AnalyzeView(self.config, self.db, self.ollama,
                                          self.metadata_extractor, self.content_reader, self.ocr)
-        self.organize_view = OrganizeView(self.config, self.db, self.organizer)
+        self.organize_view = OrganizeView(self.config, self.db, self.organizer, self.ollama)
         self.duplicates_view = DuplicatesView(self.config, self.db, self.duplicate_finder)
         self.settings_view = SettingsView(self.config_manager, self.ollama, self.db)
         self.logs_view = LogsView()

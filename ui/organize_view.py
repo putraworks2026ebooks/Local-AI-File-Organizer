@@ -107,13 +107,16 @@ class OrganizeView(QWidget):
 
     analysis_complete = Signal(dict)
 
-    def __init__(self, config: dict, db: DatabaseManager, organizer: FileOrganizer):
+    def __init__(self, config: dict, db: DatabaseManager, organizer: FileOrganizer,
+                 ollama=None):
         super().__init__()
         self.config = config
         self.db = db
         self.organizer = organizer
+        self.ollama = ollama
         self.file_categories: dict[str, str] = {}
         self.organize_worker = None
+        self.metadata_map: dict = {}
         self.logger = get_logger()
         self._init_ui()
 
