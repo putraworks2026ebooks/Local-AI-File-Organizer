@@ -286,6 +286,8 @@ class QuickOrganizeWorker(QThread):
             success, msg, op_id = self.organizer.move_file(file_path, category, metadata)
             if success:
                 results["organized"] += 1
+                if op_id:
+                    results.setdefault("op_ids", []).append(op_id)
             else:
                 results["errors"] += 1
             self.progress.emit("Organizing", i + 1, total)
@@ -324,6 +326,7 @@ class QuickOrganizeView(QWidget):
         self.scan_paths = []
         self.worker = None
         self._metadata_map = {}
+        self._last_op_ids = []
         self._init_ui()
 
     def _init_ui(self):
@@ -405,6 +408,21 @@ class QuickOrganizeView(QWidget):
         self.gps_ai_btn.setToolTip("Use AI to add country and road names to gps.md files")
         self.gps_ai_btn.clicked.connect(self._update_gps_with_ai)
         btn_layout.addWidget(self.gps_ai_btn)
+
+        self.undo_file_btn = QPushButton("↩️ Undo Last File")
+        self.undo_file_btn.setStyleSheet("padding: 14px 20px; font-size: 15px;")
+        self.undo_file_btn.setToolTip("Undo the last file moved during organize")
+        self.undo_file_btn.setEnabled(False)
+        self.undo_file_btn.clicked.connect(self._undo_last_file)
+        btn_layout.addWidget(self.undo_file_btn)
+
+        self.undo_organize_btn = QPushButton("↩️ Undo Last Organize")
+        self.undo_organize_btn.setStyleSheet("padding: 14px 20px; font-size: 15px;")
+        self.undo_organize_btn.setToolTip("Undo all files from the last organize")
+        self.undo_organize_btn.setEnabled(False)
+        self.undo_organize_btn.clicked.connect(self._undo_last_organize)
+        btn_layout.addWidget(self.undo_organize_btn)
+
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
@@ -582,6 +600,53 @@ class QuickOrganizeView(QWidget):
         else:
             self.status_label.setText("GPS update complete (no new places added)")
 
+    def _undo_last_file(self):
+        """Undo only the last file moved during organize."""
+        if not self._last_op_ids:
+            QMessageBox.information(self, "Undo", "No recent organize to undo.")
+            return
+        last_id = self._last_op_ids[-1]
+        success, message = self.organizer.op_history.undo_operation(last_id)
+        if success:
+            self._last_op_ids.pop()
+            self.undo_file_btn.setEnabled(bool(self._last_op_ids))
+            self.undo_organize_btn.setEnabled(bool(self._last_op_ids))
+            self.status_label.setText(f"Undone: {message}")
+        else:
+            QMessageBox.warning(self, "Undo Failed", message)
+
+    def _undo_last_organize(self):
+        """Undo all files from the last organize."""
+        if not self._last_op_ids:
+            QMessageBox.information(self, "Undo", "No recent organize to undo.")
+            return
+        reply = QMessageBox.question(
+            self, "Undo Last Organize",
+            f"Undo {len(self._last_op_ids)} file moves from the last organize?\n\nThis cannot be reversed.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self.status_label.setText("Undoing last organize...")
+        count = 0
+        errors = 0
+        for op_id in reversed(self._last_op_ids):
+            success, msg = self.organizer.op_history.undo_operation(op_id)
+            if success:
+                count += 1
+            else:
+                errors += 1
+
+        self._last_op_ids = []
+        self.undo_file_btn.setEnabled(False)
+        self.undo_organize_btn.setEnabled(False)
+        summary = f"Undone {count} files"
+        if errors:
+            summary += f", {errors} errors"
+        self.status_label.setText(summary)
+        QMessageBox.information(self, "Undo Complete", summary)
+
     def _cancel(self):
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
@@ -612,6 +677,9 @@ class QuickOrganizeView(QWidget):
         # Copy metadata map from worker so GPS AI button can use it
         if self.worker and hasattr(self.worker, '_metadata_map'):
             self._metadata_map = self.worker._metadata_map
+        self._last_op_ids = results.get("op_ids", [])
+        self.undo_file_btn.setEnabled(bool(self._last_op_ids))
+        self.undo_organize_btn.setEnabled(bool(self._last_op_ids))
         self.stage_label.setText("Stage: Complete")
         self.progress_bar.setVisible(False)
         self.go_btn.setText("Go -- Scan + Analyze + Organize")

@@ -202,7 +202,11 @@ class FileOrganizer:
         return results
 
     def _write_gps_files(self, metadata_map: dict = None):
-        """Write gps.md in each date folder with GPS coordinates and places."""
+        """Write gps.md in each date folder with GPS coordinates and places.
+
+        Table format: | Latitude | Longitude | File | Place |
+        Place column starts as '—' and is filled by update_gps_with_ai.
+        """
         if not metadata_map:
             return
 
@@ -230,7 +234,7 @@ class FileOrganizer:
                 folder.mkdir(parents=True, exist_ok=True)
                 gps_file = folder / "gps.md"
 
-                # Load existing entries (merge so re-organize updates)
+                # Load existing entries (merge so re-organize keeps AI place names)
                 existing = {}
                 if gps_file.exists():
                     for line in gps_file.read_text(encoding="utf-8").splitlines():
@@ -238,34 +242,43 @@ class FileOrganizer:
                             parts = [p.strip() for p in line.split("|")[1:-1]]
                             if len(parts) >= 4:
                                 try:
-                                    existing[parts[3]] = {
-                                        "lat": float(parts[1]),
-                                        "lon": float(parts[2]),
-                                        "place": parts[0] if parts[0] != "—" else "",
+                                    # New format: | lat | lon | file | place |
+                                    # Old format: | place | lat | lon | file |
+                                    # Detect: if parts[0] parses as float, it's new format
+                                    lat_val = float(parts[0])
+                                    lon_val = float(parts[1])
+                                    fname = parts[2]
+                                    place = parts[3] if parts[3] != "—" else ""
+                                    existing[fname] = {
+                                        "lat": lat_val, "lon": lon_val, "place": place,
                                     }
                                 except (ValueError, IndexError):
-                                    pass
+                                    # Old format fallback: | place | lat | lon | file |
+                                    try:
+                                        existing[parts[3]] = {
+                                            "lat": float(parts[1]),
+                                            "lon": float(parts[2]),
+                                            "place": parts[0] if parts[0] != "—" else "",
+                                        }
+                                    except (ValueError, IndexError):
+                                        pass
 
-                # Merge new entries
+                # Merge new entries (keep existing place names)
                 for e in entries:
                     key = e["file"]
                     if key not in existing:
-                        existing[key] = {
-                            "lat": e["lat"],
-                            "lon": e["lon"],
-                            "place": "",
-                        }
+                        existing[key] = {"lat": e["lat"], "lon": e["lon"], "place": ""}
 
-                # Write gps.md
+                # Write gps.md — new format: coords first, place last
                 lines = ["# GPS Data", ""]
                 lines.append(f"**Folder:** `{folder.name}`")
                 lines.append(f"**Total photos with GPS:** {len(existing)}")
                 lines.append("")
-                lines.append("| Place | Latitude | Longitude | File |")
-                lines.append("|-------|----------|-----------|------|")
+                lines.append("| Latitude | Longitude | File | Place |")
+                lines.append("|----------|-----------|------|-------|")
                 for fname, data in sorted(existing.items()):
-                    place = data.get("place") or f"{data['lat']:.4f}, {data['lon']:.4f}"
-                    lines.append(f"| {place} | {data['lat']} | {data['lon']} | {fname} |")
+                    place = data.get("place") or "—"
+                    lines.append(f"| {data['lat']} | {data['lon']} | {fname} | {place} |")
                 lines.append("")
                 lines.append(f"---\n*Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
 
@@ -278,8 +291,9 @@ class FileOrganizer:
                              progress_callback: callable = None) -> int:
         """Update gps.md files with AI-generated place names.
 
-        Uses Ollama to convert GPS coordinates into country and road names,
-        then rewrites gps.md files with the place information.
+        Uses Ollama to convert GPS coordinates into country, state, city,
+        and road names. Updates the Place column (last column) in gps.md
+        without touching the coordinate columns.
 
         Args:
             metadata_map: {file_path: metadata_dict} from organize stage.
@@ -293,6 +307,7 @@ class FileOrganizer:
             return 0
 
         import json as _json
+        import re as _re
 
         # Collect GPS data per folder (same grouping as _write_gps_files)
         folder_gps: dict = {}
@@ -320,7 +335,7 @@ class FileOrganizer:
             if not gps_file.exists():
                 continue
 
-            # Load existing entries
+            # Load existing entries from gps.md (new format: | lat | lon | file | place |)
             existing = {}
             if gps_file.exists():
                 for line in gps_file.read_text(encoding="utf-8").splitlines():
@@ -328,18 +343,23 @@ class FileOrganizer:
                         parts = [p.strip() for p in line.split("|")[1:-1]]
                         if len(parts) >= 4:
                             try:
-                                place_str = parts[0] if parts[0] != "—" else ""
-                                # Treat coordinate placeholders as empty
-                                import re as _re
-                                if _re.match(r"^-?\d+\.\d+,\s*-?\d+\.\d+$", place_str):
-                                    place_str = ""
-                                existing[parts[3]] = {
-                                    "lat": float(parts[1]),
-                                    "lon": float(parts[2]),
-                                    "place": place_str,
+                                lat_val = float(parts[0])
+                                lon_val = float(parts[1])
+                                fname = parts[2]
+                                place = parts[3] if parts[3] != "—" else ""
+                                existing[fname] = {
+                                    "lat": lat_val, "lon": lon_val, "place": place,
                                 }
                             except (ValueError, IndexError):
-                                pass
+                                # Old format fallback: | place | lat | lon | file |
+                                try:
+                                    existing[parts[3]] = {
+                                        "lat": float(parts[1]),
+                                        "lon": float(parts[2]),
+                                        "place": parts[0] if parts[0] != "—" else "",
+                                    }
+                                except (ValueError, IndexError):
+                                    pass
 
             # Ask Ollama for place names for entries that don't have one
             for e in entries:
@@ -366,33 +386,51 @@ class FileOrganizer:
                 try:
                     response = ollama.chat(messages)
                     if response:
-                        result = _json.loads(response.strip())
+                        # Strip markdown code fences if present
+                        cleaned = response.strip()
+                        if cleaned.startswith("```"):
+                            # Remove ```json or ``` wrapper
+                            cleaned = _re.sub(r"^```(?:json)?\s*", "", cleaned)
+                            cleaned = _re.sub(r"\s*```$", "", cleaned)
+                            cleaned = cleaned.strip()
+                        # Try to find JSON object in the response
+                        json_match = _re.search(r"\{[^{}]*\}", cleaned)
+                        if json_match:
+                            cleaned = json_match.group(0)
+
+                        result = _json.loads(cleaned)
                         # Build place name from components
-                        parts = []
+                        place_parts = []
                         for key in ("country", "state", "city", "road"):
                             val = result.get(key, "").strip()
-                            if val and val.lower() not in ("unknown", "n/a", "none"):
-                                parts.append(val)
-                        place = ", ".join(parts) if parts else ""
+                            if val and val.lower() not in ("unknown", "n/a", "none", "null"):
+                                place_parts.append(val)
+                        place = ", ".join(place_parts) if place_parts else ""
                         if place:
                             entry["place"] = place
                             count += 1
                             if progress_callback:
                                 progress_callback(fname, place)
+                        else:
+                            self.logger.warning(f"AI returned empty place for {fname}: {response[:200]}")
+                    else:
+                        self.logger.warning(f"AI returned empty response for {fname}")
+                except _json.JSONDecodeError as e:
+                    self.logger.warning(f"AI GPS JSON parse failed for {fname}: {e} — response: {response[:200] if response else 'None'}")
                 except Exception as e:
                     self.logger.warning(f"AI GPS lookup failed for {fname}: {e}")
 
-            # Rewrite gps.md with place names
+            # Rewrite gps.md with place names (new format: coords first, place last)
             from datetime import datetime
             lines = ["# GPS Data", ""]
             lines.append(f"**Folder:** `{folder.name}`")
             lines.append(f"**Total photos with GPS:** {len(existing)}")
             lines.append("")
-            lines.append("| Place | Latitude | Longitude | File |")
-            lines.append("|-------|----------|-----------|------|")
+            lines.append("| Latitude | Longitude | File | Place |")
+            lines.append("|----------|-----------|------|-------|")
             for fname, data in sorted(existing.items()):
-                place = data.get("place") or f"{data['lat']:.4f}, {data['lon']:.4f}"
-                lines.append(f"| {place} | {data['lat']} | {data['lon']} | {fname} |")
+                place = data.get("place") or "—"
+                lines.append(f"| {data['lat']} | {data['lon']} | {fname} | {place} |")
             lines.append("")
             lines.append(f"---\n*Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
 
