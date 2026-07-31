@@ -274,6 +274,125 @@ class FileOrganizer:
             except Exception as e:
                 self.logger.warning(f"Failed to write GPS for {folder}: {e}")
 
+    def update_gps_with_ai(self, metadata_map: dict, ollama,
+                             progress_callback: callable = None) -> int:
+        """Update gps.md files with AI-generated place names.
+
+        Uses Ollama to convert GPS coordinates into country and road names,
+        then rewrites gps.md files with the place information.
+
+        Args:
+            metadata_map: {file_path: metadata_dict} from organize stage.
+            ollama: OllamaClient instance for AI lookups.
+            progress_callback: optional callback(filename, place_name).
+
+        Returns:
+            Number of photos that got place names.
+        """
+        if not metadata_map or not ollama or not ollama.is_available():
+            return 0
+
+        import json as _json
+
+        # Collect GPS data per folder (same grouping as _write_gps_files)
+        folder_gps: dict = {}
+        for file_path, meta in metadata_map.items():
+            lat = meta.get("GPSLatitude")
+            lon = meta.get("GPSLongitude")
+            if lat is None or lon is None:
+                continue
+            category = meta.get("category", "Pictures")
+            dest_dir = self.get_category_path(category, file_path, meta)
+            if dest_dir.name.isdigit() or dest_dir.parent.name.isdigit():
+                folder_gps.setdefault(str(dest_dir), []).append({
+                    "file": Path(file_path).name,
+                    "lat": round(lat, 6),
+                    "lon": round(lon, 6),
+                })
+
+        if not folder_gps:
+            return 0
+
+        count = 0
+        for folder_str, entries in folder_gps.items():
+            folder = Path(folder_str)
+            gps_file = folder / "gps.md"
+            if not gps_file.exists():
+                continue
+
+            # Load existing entries
+            existing = {}
+            if gps_file.exists():
+                for line in gps_file.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("| ") and "|" in line[2:]:
+                        parts = [p.strip() for p in line.split("|")[1:-1]]
+                        if len(parts) >= 4:
+                            try:
+                                existing[parts[3]] = {
+                                    "lat": float(parts[1]),
+                                    "lon": float(parts[2]),
+                                    "place": parts[0] if parts[0] != "—" else "",
+                                }
+                            except (ValueError, IndexError):
+                                pass
+
+            # Ask Ollama for place names for entries that don't have one
+            for e in entries:
+                fname = e["file"]
+                if fname not in existing:
+                    existing[fname] = {"lat": e["lat"], "lon": e["lon"], "place": ""}
+
+                entry = existing[fname]
+                if entry.get("place"):
+                    continue  # Already has a place name
+
+                # Ask Ollama: given lat/lon, what country and road?
+                prompt = (
+                    f"Given the GPS coordinates latitude {entry['lat']}, longitude {entry['lon']}, "
+                    f"what is the country and nearest road or area name? "
+                    f"Return a short place description (e.g. 'Singapore, Orchard Road'). "
+                    'Return JSON only: {"place": "<description>"}' 
+                )
+                messages = [
+                    {"role": "system", "content": "You are a geocoding assistant. Given GPS coordinates, return the country and nearest road or area name. Return only valid JSON."},
+                    {"role": "user", "content": prompt},
+                ]
+
+                try:
+                    response = ollama.chat(messages)
+                    if response:
+                        result = _json.loads(response.strip())
+                        place = result.get("place", "").strip()
+                        if place:
+                            entry["place"] = place
+                            count += 1
+                            if progress_callback:
+                                progress_callback(fname, place)
+                except Exception as e:
+                    self.logger.warning(f"AI GPS lookup failed for {fname}: {e}")
+
+            # Rewrite gps.md with place names
+            from datetime import datetime
+            lines = ["# GPS Data", ""]
+            lines.append(f"**Folder:** `{folder.name}`")
+            lines.append(f"**Total photos with GPS:** {len(existing)}")
+            lines.append("")
+            lines.append("| Place | Latitude | Longitude | File |")
+            lines.append("|-------|----------|-----------|------|")
+            for fname, data in sorted(existing.items()):
+                place = data.get("place") or f"{data['lat']:.4f}, {data['lon']:.4f}"
+                lines.append(f"| {place} | {data['lat']} | {data['lon']} | {fname} |")
+            lines.append("")
+            lines.append(f"---\n*Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
+
+            try:
+                gps_file.write_text("\n".join(lines), encoding="utf-8")
+                self.logger.info(f"GPS AI update written: {gps_file} ({count} places added)")
+            except Exception as e:
+                self.logger.warning(f"Failed to write GPS AI update for {folder}: {e}")
+
+        return count
+
     def _cleanup_empty_folders(self, file_categories: dict) -> None:
         """Move empty source folders to ToBeDeleted after organizing."""
         import shutil

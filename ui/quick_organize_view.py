@@ -323,6 +323,7 @@ class QuickOrganizeView(QWidget):
         self.ocr = ocr
         self.scan_paths = []
         self.worker = None
+        self._metadata_map = {}
         self._init_ui()
 
     def _init_ui(self):
@@ -608,6 +609,9 @@ class QuickOrganizeView(QWidget):
         self.status_label.setText(msg)
 
     def _on_finished(self, results):
+        # Copy metadata map from worker so GPS AI button can use it
+        if self.worker and hasattr(self.worker, '_metadata_map'):
+            self._metadata_map = self.worker._metadata_map
         self.progress_bar.setVisible(False)
         self.go_btn.setText("Go -- Scan + Analyze + Organize")
         self.go_btn.setStyleSheet("padding: 14px 28px; font-size: 15px;")
