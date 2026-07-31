@@ -17,7 +17,6 @@ from PySide6.QtCore import Qt, Signal, QThread
 from core.ollama_client import OllamaClient
 from utils.logger import get_logger
 
-
 class QuickOrganizeWorker(QThread):
     """Runs scan -> analyze -> organize in a single worker thread."""
     progress = Signal(str, int, int)
@@ -308,7 +307,6 @@ class QuickOrganizeWorker(QThread):
             except Exception as e:
                 self.logger.warning(f"Cleanup failed: {e}")
 
-
 class QuickOrganizeView(QWidget):
     """All-in-one: Scan -> Analyze -> Organize in a single flow."""
 
@@ -409,19 +407,18 @@ class QuickOrganizeView(QWidget):
         self.gps_ai_btn.clicked.connect(self._update_gps_with_ai)
         btn_layout.addWidget(self.gps_ai_btn)
 
-        self.undo_file_btn = QPushButton("↩️ Undo Last File")
-        self.undo_file_btn.setStyleSheet("padding: 14px 20px; font-size: 15px;")
-        self.undo_file_btn.setToolTip("Undo the last file moved during organize")
-        self.undo_file_btn.setEnabled(False)
-        self.undo_file_btn.clicked.connect(self._undo_last_file)
-        btn_layout.addWidget(self.undo_file_btn)
-
-        self.undo_organize_btn = QPushButton("↩️ Undo Last Organize")
-        self.undo_organize_btn.setStyleSheet("padding: 14px 20px; font-size: 15px;")
-        self.undo_organize_btn.setToolTip("Undo all files from the last organize")
-        self.undo_organize_btn.setEnabled(False)
-        self.undo_organize_btn.clicked.connect(self._undo_last_organize)
-        btn_layout.addWidget(self.undo_organize_btn)
+        from PySide6.QtWidgets import QToolButton, QMenu
+        self.undo_menu_btn = QToolButton()
+        self.undo_menu_btn.setText("↩️ Undo")
+        self.undo_menu_btn.setStyleSheet("padding: 14px 20px; font-size: 15px;")
+        self.undo_menu_btn.setPopupMode(QToolButton.InstantPopup)
+        self.undo_menu_btn.setEnabled(False)
+        undo_menu = QMenu(self.undo_menu_btn)
+        undo_menu.addAction("Undo Last File", self._undo_last_file)
+        undo_menu.addAction("Undo Last Organize...", self._undo_last_organize)
+        self.undo_menu_btn.setMenu(undo_menu)
+        self.undo_menu_btn.setToolTip("Undo recent organize operations")
+        btn_layout.addWidget(self.undo_menu_btn)
 
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
@@ -609,8 +606,8 @@ class QuickOrganizeView(QWidget):
         success, message = self.organizer.op_history.undo_operation(last_id)
         if success:
             self._last_op_ids.pop()
-            self.undo_file_btn.setEnabled(bool(self._last_op_ids))
-            self.undo_organize_btn.setEnabled(bool(self._last_op_ids))
+            self.undo_menu_btn.setEnabled(bool(self._last_op_ids))
+            
             self.status_label.setText(f"Undone: {message}")
         else:
             QMessageBox.warning(self, "Undo Failed", message)
@@ -639,8 +636,7 @@ class QuickOrganizeView(QWidget):
                 errors += 1
 
         self._last_op_ids = []
-        self.undo_file_btn.setEnabled(False)
-        self.undo_organize_btn.setEnabled(False)
+        self.undo_menu_btn.setEnabled(False)
         summary = f"Undone {count} files"
         if errors:
             summary += f", {errors} errors"
@@ -678,8 +674,8 @@ class QuickOrganizeView(QWidget):
         if self.worker and hasattr(self.worker, '_metadata_map'):
             self._metadata_map = self.worker._metadata_map
         self._last_op_ids = results.get("op_ids", [])
-        self.undo_file_btn.setEnabled(bool(self._last_op_ids))
-        self.undo_organize_btn.setEnabled(bool(self._last_op_ids))
+        self.undo_menu_btn.setEnabled(bool(self._last_op_ids))
+        
         self.stage_label.setText("Stage: Complete")
         self.progress_bar.setVisible(False)
         self.go_btn.setText("Go -- Scan + Analyze + Organize")

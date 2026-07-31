@@ -291,154 +291,164 @@ class FileOrganizer:
                              progress_callback: callable = None) -> int:
         """Update gps.md files with AI-generated place names.
 
-        Uses Ollama to convert GPS coordinates into country, state, city,
-        and road names. Updates the Place column (last column) in gps.md
-        without touching the coordinate columns.
+        Reads gps.md files directly, extracts coordinates from table rows,
+        and asks Ollama to identify country, state, city, and road for each
+        entry that doesn't already have a place name.
+
+        Does NOT depend on metadata_map — works purely from gps.md contents.
 
         Args:
-            metadata_map: {file_path: metadata_dict} from organize stage.
+            metadata_map: kept for API compatibility (unused — reads gps.md directly).
             ollama: OllamaClient instance for AI lookups.
             progress_callback: optional callback(filename, place_name).
 
         Returns:
             Number of photos that got place names.
         """
-        if not metadata_map or not ollama or not ollama.is_available():
+        if not ollama or not ollama.is_available():
+            self.logger.warning("GPS AI: Ollama not available")
             return 0
 
         import json as _json
         import re as _re
 
-        # Collect GPS data per folder (same grouping as _write_gps_files)
-        folder_gps: dict = {}
-        for file_path, meta in metadata_map.items():
-            lat = meta.get("GPSLatitude")
-            lon = meta.get("GPSLongitude")
-            if lat is None or lon is None:
-                continue
-            category = meta.get("category", "Pictures")
-            dest_dir = self.get_category_path(category, file_path, meta)
-            if dest_dir.name.isdigit() or dest_dir.parent.name.isdigit():
-                folder_gps.setdefault(str(dest_dir), []).append({
-                    "file": Path(file_path).name,
-                    "lat": round(lat, 6),
-                    "lon": round(lon, 6),
-                })
-
-        if not folder_gps:
+        # Find all gps.md files under the output base directory
+        output_base = self.config.get("organize", {}).get("output_base", "")
+        if not output_base:
+            self.logger.warning("GPS AI: no output_base configured")
             return 0
 
+        base_path = Path(output_base)
+        if not base_path.exists():
+            self.logger.warning(f"GPS AI: output_base does not exist: {base_path}")
+            return 0
+
+        gps_files = list(base_path.rglob("gps.md"))
+        if not gps_files:
+            self.logger.warning(f"GPS AI: no gps.md files found under {base_path}")
+            return 0
+
+        self.logger.info(f"GPS AI: found {len(gps_files)} gps.md files")
+
         count = 0
-        for folder_str, entries in folder_gps.items():
-            folder = Path(folder_str)
-            gps_file = folder / "gps.md"
-            if not gps_file.exists():
-                continue
-
-            # Load existing entries from gps.md (new format: | lat | lon | file | place |)
-            existing = {}
-            if gps_file.exists():
-                for line in gps_file.read_text(encoding="utf-8").splitlines():
-                    if line.startswith("| ") and "|" in line[2:]:
-                        parts = [p.strip() for p in line.split("|")[1:-1]]
-                        if len(parts) >= 4:
-                            try:
-                                lat_val = float(parts[0])
-                                lon_val = float(parts[1])
-                                fname = parts[2]
-                                place = parts[3] if parts[3] != "—" else ""
-                                existing[fname] = {
-                                    "lat": lat_val, "lon": lon_val, "place": place,
-                                }
-                            except (ValueError, IndexError):
-                                # Old format fallback: | place | lat | lon | file |
-                                try:
-                                    existing[parts[3]] = {
-                                        "lat": float(parts[1]),
-                                        "lon": float(parts[2]),
-                                        "place": parts[0] if parts[0] != "—" else "",
-                                    }
-                                except (ValueError, IndexError):
-                                    pass
-
-            # Ask Ollama for place names for entries that don't have one
-            for e in entries:
-                fname = e["file"]
-                if fname not in existing:
-                    existing[fname] = {"lat": e["lat"], "lon": e["lon"], "place": ""}
-
-                entry = existing[fname]
-                if entry.get("place"):
-                    continue  # Already has a place name
-
-                # Ask Ollama: given lat/lon, what country, state, city, road?
-                json_template = '{"country": "<country>", "state": "<state>", "city": "<city>", "road": "<road>"}'
-                prompt = (
-                    f"Given the GPS coordinates latitude {entry['lat']}, longitude {entry['lon']}, "
-                    f"what is the country, state/province, city, and nearest road or area name? "
-                    f"Return JSON only: {json_template}"
-                )
-                messages = [
-                    {"role": "system", "content": "You are a geocoding assistant. Given GPS coordinates, return the country, state/province, city, and nearest road or area name. Return only valid JSON with keys: country, state, city, road."},
-                    {"role": "user", "content": prompt},
-                ]
-
-                try:
-                    response = ollama.chat(messages)
-                    if response:
-                        # Strip markdown code fences if present
-                        cleaned = response.strip()
-                        if cleaned.startswith("```"):
-                            # Remove ```json or ``` wrapper
-                            cleaned = _re.sub(r"^```(?:json)?\s*", "", cleaned)
-                            cleaned = _re.sub(r"\s*```$", "", cleaned)
-                            cleaned = cleaned.strip()
-                        # Try to find JSON object in the response
-                        json_match = _re.search(r"\{[^{}]*\}", cleaned)
-                        if json_match:
-                            cleaned = json_match.group(0)
-
-                        result = _json.loads(cleaned)
-                        # Build place name from components
-                        place_parts = []
-                        for key in ("country", "state", "city", "road"):
-                            val = result.get(key, "").strip()
-                            if val and val.lower() not in ("unknown", "n/a", "none", "null"):
-                                place_parts.append(val)
-                        place = ", ".join(place_parts) if place_parts else ""
-                        if place:
-                            entry["place"] = place
-                            count += 1
-                            if progress_callback:
-                                progress_callback(fname, place)
-                        else:
-                            self.logger.warning(f"AI returned empty place for {fname}: {response[:200]}")
-                    else:
-                        self.logger.warning(f"AI returned empty response for {fname}")
-                except _json.JSONDecodeError as e:
-                    self.logger.warning(f"AI GPS JSON parse failed for {fname}: {e} — response: {response[:200] if response else 'None'}")
-                except Exception as e:
-                    self.logger.warning(f"AI GPS lookup failed for {fname}: {e}")
-
-            # Rewrite gps.md with place names (new format: coords first, place last)
-            from datetime import datetime
-            lines = ["# GPS Data", ""]
-            lines.append(f"**Folder:** `{folder.name}`")
-            lines.append(f"**Total photos with GPS:** {len(existing)}")
-            lines.append("")
-            lines.append("| Latitude | Longitude | File | Place |")
-            lines.append("|----------|-----------|------|-------|")
-            for fname, data in sorted(existing.items()):
-                place = data.get("place") or "—"
-                lines.append(f"| {data['lat']} | {data['lon']} | {fname} | {place} |")
-            lines.append("")
-            lines.append(f"---\n*Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
-
+        for gps_file in gps_files:
+            self.logger.info(f"GPS AI: processing {gps_file}")
             try:
-                gps_file.write_text("\n".join(lines), encoding="utf-8")
-                self.logger.info(f"GPS AI update written: {gps_file} ({count} places added)")
+                lines_out = []
+                rows_updated = 0
+                rows_seen = 0
+
+                for line in gps_file.read_text(encoding="utf-8").splitlines():
+                    # Pass through non-table lines
+                    if not line.startswith("|"):
+                        lines_out.append(line)
+                        continue
+
+                    # Check for separator row (|---|---|...)
+                    if _re.match(r"^\|[-|\s]+\|$", line):
+                        lines_out.append(line)
+                        continue
+
+                    # Parse table row: | col1 | col2 | col3 | col4 |
+                    parts = [p.strip() for p in line.split("|")[1:-1]]
+                    if len(parts) < 4:
+                        lines_out.append(line)
+                        continue
+
+                    rows_seen += 1
+
+                    # Detect format: new = | lat | lon | file | place |
+                    #                old = | place | lat | lon | file |
+                    try:
+                        lat_val = float(parts[0])
+                        lon_val = float(parts[1])
+                        fname = parts[2]
+                        place_str = parts[3]
+                    except (ValueError, IndexError):
+                        # Old format: | place | lat | lon | file |
+                        try:
+                            place_str = parts[0]
+                            lat_val = float(parts[1])
+                            lon_val = float(parts[2])
+                            fname = parts[3]
+                        except (ValueError, IndexError):
+                            lines_out.append(line)
+                            continue
+
+                    # Check if place is empty, em-dash, or coordinate placeholder
+                    place_clean = place_str.strip()
+                    if place_clean in ("\u2014", "-", ""):
+                        place_clean = ""
+                    # Detect coordinate placeholder like "1.3521, 103.8198"
+                    if _re.match(r"^-?\d+\.\d+,\s*-?\d+\.\d+$", place_clean):
+                        place_clean = ""
+
+                    if place_clean:
+                        # Already has a real place name, keep it
+                        lines_out.append(f"| {lat_val} | {lon_val} | {fname} | {place_clean} |")
+                        continue
+
+                    # No place name — ask Ollama for coordinates
+                    self.logger.info(f"GPS AI: asking Ollama for lat={lat_val}, lon={lon_val} ({fname})")
+                    json_template = '{"country": "<country>", "state": "<state>", "city": "<city>", "road": "<road>"}'
+                    prompt = (
+                        f"Given the GPS coordinates latitude {lat_val}, longitude {lon_val}, "
+                        f"what is the country, state/province, city, and nearest road or area name? "
+                        f"Return JSON only: {json_template}"
+                    )
+                    messages = [
+                        {"role": "system", "content": "You are a geocoding assistant. Given GPS coordinates, return the country, state/province, city, and nearest road or area name. Return only valid JSON with keys: country, state, city, road."},
+                        {"role": "user", "content": prompt},
+                    ]
+
+                    new_place = ""
+                    try:
+                        response = ollama.chat(messages)
+                        if response:
+                            self.logger.info(f"GPS AI: Ollama response for {fname}: {response[:200]}")
+                            # Strip markdown code fences if present
+                            cleaned = response.strip()
+                            if cleaned.startswith("```"):
+                                cleaned = _re.sub(r"^```(?:json)?\s*", "", cleaned)
+                                cleaned = _re.sub(r"\s*```$", "", cleaned)
+                                cleaned = cleaned.strip()
+                            # Try to find JSON object in the response
+                            json_match = _re.search(r"\{[^{}]*\}", cleaned)
+                            if json_match:
+                                cleaned = json_match.group(0)
+
+                            result = _json.loads(cleaned)
+                            # Build place name from components
+                            place_parts = []
+                            for key in ("country", "state", "city", "road"):
+                                val = result.get(key, "").strip()
+                                if val and val.lower() not in ("unknown", "n/a", "none", "null"):
+                                    place_parts.append(val)
+                            new_place = ", ".join(place_parts) if place_parts else ""
+                        else:
+                            self.logger.warning(f"GPS AI: Ollama returned empty response for {fname}")
+                    except _json.JSONDecodeError as e:
+                        self.logger.warning(f"GPS AI: JSON parse failed for {fname}: {e}")
+                    except Exception as e:
+                        self.logger.warning(f"GPS AI: lookup failed for {fname}: {e}")
+
+                    if new_place:
+                        count += 1
+                        rows_updated += 1
+                        if progress_callback:
+                            progress_callback(fname, new_place)
+                    else:
+                        new_place = "\u2014"
+
+                    # Rebuild the row in new format: | lat | lon | file | place |
+                    lines_out.append(f"| {lat_val} | {lon_val} | {fname} | {new_place} |")
+
+                # Rewrite the gps.md file
+                gps_file.write_text("\n".join(lines_out), encoding="utf-8")
+                self.logger.info(f"GPS AI: updated {gps_file} ({rows_updated}/{rows_seen} rows got place names)")
+
             except Exception as e:
-                self.logger.warning(f"Failed to write GPS AI update for {folder}: {e}")
+                self.logger.warning(f"GPS AI: failed to process {gps_file}: {e}")
 
         return count
 
